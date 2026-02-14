@@ -31,6 +31,7 @@
 #include <iostream>
 #include <vector>
 
+const char* PROTOCOL_VERSION = "v2.0-Magic";
 const int PORT = 9999;
 const int SCREEN_WIDTH = 1280;
 const int SCREEN_HEIGHT = 720;
