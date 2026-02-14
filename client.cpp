@@ -1,17 +1,35 @@
-// client.cpp - High-performance monitor extender client with SDL2
-// Compile: g++ -std=c++17 client.cpp -o client -lws2_32 -lSDL2 -lSDL2main -O3
-// Or: g++ -std=c++17 client.cpp -o client -lws2_32 -I<SDL2_include> -L<SDL2_lib> -lSDL2 -O3
+// client.cpp - Cross-platform monitor extender client with SDL2
+// Windows: cl /std:c++17 /O2 /EHsc client.cpp SDL2.lib SDL2main.lib ws2_32.lib
+// Linux: g++ -std=c++17 -O3 client.cpp -o client $(pkg-config --cflags --libs sdl2) -lpthread
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <SDL2/SDL.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    #pragma comment(lib, "SDL2.lib")
+    #pragma comment(lib, "SDL2main.lib")
+    typedef int socklen_t;
+    #define close closesocket
+#else
+    #include <sys/socket.h>
+    #include <arpa/inet.h>
+    #include <netinet/tcp.h>
+    #include <unistd.h>
+    #include <errno.h>
+    #include <cstring>
+    typedef int SOCKET;
+    #define INVALID_SOCKET -1
+    #define SOCKET_ERROR -1
+#endif
+
+#ifdef _MSC_VER
+    #include <SDL.h>
+#else
+    #include <SDL2/SDL.h>
+#endif
+
 #include <iostream>
 #include <vector>
-#include <cstring>
-
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "SDL2.lib")
-#pragma comment(lib, "SDL2main.lib")
 
 const int PORT = 9999;
 const int SCREEN_WIDTH = 960;
@@ -34,7 +52,7 @@ bool RecvAll(SOCKET sock, char* buffer, int length) {
     while (total_received < length) {
         int received = recv(sock, buffer + total_received, length - total_received, 0);
         if (received <= 0) {
-            return false; // Connection closed or error
+            return false;
         }
         total_received += received;
     }
@@ -52,18 +70,22 @@ int main(int argc, char* argv[]) {
     std::cout << "[INFO] Monitor Extender Client (C++)" << std::endl;
     std::cout << "[INFO] Connecting to " << server_ip << ":" << PORT << std::endl;
 
-    // Initialize Winsock
+#ifdef _WIN32
+    // Initialize Winsock (Windows only)
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
         std::cerr << "[ERROR] WSAStartup failed" << std::endl;
         return 1;
     }
+#endif
 
     // Create socket
     SOCKET client_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (client_socket == INVALID_SOCKET) {
         std::cerr << "[ERROR] Failed to create socket" << std::endl;
+#ifdef _WIN32
         WSACleanup();
+#endif
         return 1;
     }
 
@@ -72,15 +94,21 @@ int main(int argc, char* argv[]) {
     setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag));
 
     // Connect
-    sockaddr_in server_addr = {};
+    struct sockaddr_in server_addr = {};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
     inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
 
-    if (connect(client_socket, (sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+    if (connect(client_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+#ifdef _WIN32
         std::cerr << "[ERROR] Connection failed: " << WSAGetLastError() << std::endl;
-        closesocket(client_socket);
+#else
+        std::cerr << "[ERROR] Connection failed: " << strerror(errno) << std::endl;
+#endif
+        close(client_socket);
+#ifdef _WIN32
         WSACleanup();
+#endif
         return 1;
     }
 
@@ -89,8 +117,10 @@ int main(int argc, char* argv[]) {
     // Initialize SDL
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "[ERROR] SDL_Init failed: " << SDL_GetError() << std::endl;
-        closesocket(client_socket);
+        close(client_socket);
+#ifdef _WIN32
         WSACleanup();
+#endif
         return 1;
     }
 
@@ -107,8 +137,10 @@ int main(int argc, char* argv[]) {
     if (!window) {
         std::cerr << "[ERROR] Failed to create window: " << SDL_GetError() << std::endl;
         SDL_Quit();
-        closesocket(client_socket);
+        close(client_socket);
+#ifdef _WIN32
         WSACleanup();
+#endif
         return 1;
     }
 
@@ -118,8 +150,10 @@ int main(int argc, char* argv[]) {
         std::cerr << "[ERROR] Failed to create renderer: " << SDL_GetError() << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
-        closesocket(client_socket);
+        close(client_socket);
+#ifdef _WIN32
         WSACleanup();
+#endif
         return 1;
     }
 
@@ -137,8 +171,10 @@ int main(int argc, char* argv[]) {
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
-        closesocket(client_socket);
+        close(client_socket);
+#ifdef _WIN32
         WSACleanup();
+#endif
         return 1;
     }
 
@@ -183,7 +219,6 @@ int main(int argc, char* argv[]) {
         }
 
         // Update texture (this assumes raw RGB data - modify if using JPEG)
-        // For JPEG, you'd decode first using libjpeg-turbo
         SDL_UpdateTexture(texture, nullptr, frame_buffer.data(), SCREEN_WIDTH * 3);
 
         // Render
@@ -207,8 +242,10 @@ int main(int argc, char* argv[]) {
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    closesocket(client_socket);
+    close(client_socket);
+#ifdef _WIN32
     WSACleanup();
+#endif
 
     std::cout << "[INFO] Client closed" << std::endl;
     return 0;
