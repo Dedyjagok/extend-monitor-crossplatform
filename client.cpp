@@ -227,9 +227,26 @@ int main(int argc, char* argv[]) {
         int frame_width = ntohl(width_net);
         int frame_height = ntohl(height_net);
         
+        // Debug first frame
+        static bool first_frame = true;
+        if (first_frame) {
+            std::cout << "[DEBUG] Received: " << frame_width << "x" << frame_height << " (" << frame_size << " bytes, pitch=" << (frame_width * 3) << ")" << std::endl;
+            first_frame = false;
+        }
+        
         // Sanity check
         if (frame_size > 50 * 1024 * 1024) { // Max 50MB
             std::cerr << "[ERROR] Invalid frame size: " << frame_size << std::endl;
+            break;
+        }
+        
+        // Verify frame size matches expected RGB size
+        uint64_t expected_size = frame_width * frame_height * 3;
+        if (frame_size != expected_size) {
+            std::cerr << "[ERROR] Frame size mismatch!" << std::endl;
+            std::cerr << "  Expected: " << expected_size << " bytes (" << frame_width << "x" << frame_height << " RGB)" << std::endl;
+            std::cerr << "  Received: " << frame_size << " bytes" << std::endl;
+            std::cerr << "  Server may be sending wrong format!" << std::endl;
             break;
         }
 

@@ -294,18 +294,22 @@ void DrawCursor(std::vector<uint8_t>& buffer, int width, int height, int offset_
     }
 }
 
-// Simple bilinear downscale
+// Simple bilinear downscale with bounds checking
 void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
                 std::vector<uint8_t>& dst, int dst_w, int dst_h) {
     dst.resize(dst_w * dst_h * 4);
     
-    float x_ratio = (float)src_w / dst_w;
-    float y_ratio = (float)src_h / dst_h;
+    float x_ratio = (float)(src_w - 1) / dst_w;
+    float y_ratio = (float)(src_h - 1) / dst_h;
     
     for (int y = 0; y < dst_h; y++) {
         for (int x = 0; x < dst_w; x++) {
             int src_x = (int)(x * x_ratio);
             int src_y = (int)(y * y_ratio);
+            
+            // Clamp to valid range
+            src_x = std::min(src_x, src_w - 1);
+            src_y = std::min(src_y, src_h - 1);
             
             int src_idx = (src_y * src_w + src_x) * 4;
             int dst_idx = (y * dst_w + x) * 4;
@@ -402,6 +406,7 @@ int main(int argc, char* argv[]) {
 
         setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag));
         std::cout << "[INFO] Client connected!" << std::endl;
+        std::cout << "[DEBUG] Output: " << TARGET_WIDTH << "x" << TARGET_HEIGHT << " RGB (" << (TARGET_WIDTH * TARGET_HEIGHT * 3) << " bytes/frame)" << std::endl;
 
         // Streaming loop
         std::vector<uint8_t> frame_bgra;
