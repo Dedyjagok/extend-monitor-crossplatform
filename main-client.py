@@ -1,6 +1,5 @@
 import socket
 import cv2
-import pickle
 import struct
 import numpy as np
 import sys
@@ -12,6 +11,8 @@ PORT = 9999
 def start_client():
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # Added keepalive
+    # Disable Nagle's algorithm for lower latency
+    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     
     try:
         print(f"[INFO] Connecting to {SERVER_IP}:{PORT}...")
@@ -51,7 +52,7 @@ def start_client():
             packed_msg_size = data[:payload_size]
             data = data[payload_size:]
             msg_size = struct.unpack("!Q", packed_msg_size)[0]
-            print(f"[DEBUG] Expecting message size: {msg_size}")
+            # print(f"[DEBUG] Expecting message size: {msg_size}")
 
             # Receive payload
             while len(data) < msg_size:
@@ -64,8 +65,9 @@ def start_client():
             frame_data = data[:msg_size]
             data = data[msg_size:]
 
-            # Decode image
-            frame_numpy = pickle.loads(frame_data)
+            # Decode image - NO PICKLE (Faster)
+            # Convert raw bytes to numpy array then decode
+            frame_numpy = np.frombuffer(frame_data, dtype=np.uint8)
             frame = cv2.imdecode(frame_numpy, cv2.IMREAD_COLOR)
 
             if frame is not None:
