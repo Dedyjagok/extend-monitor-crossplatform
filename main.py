@@ -2,166 +2,182 @@ import socket
 import cv2
 import struct
 import numpy as np
-import mss
+import dxcam
+import threading
 import time
 import win32gui
-import win32api
-import win32con
 
-# Konfigurasi Server
-HOST_IP = '0.0.0.0'  # Dengarkan semua koneksi masuk
-PORT = 9999          # Port bebas
+# Konfigurasi
+HOST_IP = '0.0.0.0'
+PORT = 9999
+WIDTH, HEIGHT = 1280, 720 # Target Resolution (Resize agar ringan di network)
 
-def draw_cursor(img, rel_x, rel_y):
-    """
-    Menggambar kursor panah sederhana di atas gambar.
-    """
-    # Warna Kursor (Putih dengan garis tepi Hitam)
-    color_fill = (255, 255, 255)
-    color_border = (0, 0, 0)
-    
-    # Bentuk Panah Kursor (Polygon sederhana)
-    # Titik-titik koordinat relatif terhadap ujung panah (0,0)
-    cursor_points = np.array([
-        [0, 0],    # Ujung atas
-        [0, 20],   # Bawah kiri
-        [5, 15],   # Lekukan dalam
-        [12, 22],  # Ekor 1
-        [14, 20],  # Ekor 2
-        [7, 12],   # Lekukan luar
-        [15, 12]   # Kanan atas
-    ], np.int32)
+# Inisialisasi UDP Socket (Lebih cepat dari TCP)
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# Perbesar buffer socket agar tidak packet loss
+try:
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65535)
+except:
+    print("[WARNING] Could not set SO_SNDBUF")
 
-    # Geser titik ke posisi mouse sebenarnya
-    cursor_points = cursor_points + np.array([rel_x, rel_y])
+# Inisialisasi DXCam (GPU Capture - Super Cepat)
+# output_idx=0 -> Monitor Utama
+# output_idx=1 -> Monitor Kedua (Virtual/Extend)
+# Ganti ke 0 jika ingin test capture layar utama dulu
+TARGET_MONITOR_IDX = 1 
 
-    # Gambar di layar (Fill dulu baru Border)
+try:
+    camera = dxcam.create(output_idx=TARGET_MONITOR_IDX, output_color="BGR")
+    print(f"[INFO] DXCam initialized on monitor index {TARGET_MONITOR_IDX}")
+except Exception as e:
+    print(f"[ERROR] Gagal init DXCam di monitor {TARGET_MONITOR_IDX}. Fallback ke monitor 0.")
     try:
-        cv2.fillPoly(img, [cursor_points], color_fill)
-        cv2.polylines(img, [cursor_points], True, color_border, 1)
+        camera = dxcam.create(output_idx=0, output_color="BGR")
+    except Exception as e2:
+        print(f"[FETAL] DXCam gagal total: {e2}")
+        exit()
+
+client_addr = None
+running = True
+
+def draw_cursor(frame, offset_x=0, offset_y=0):
+    try:
+        flags, hcursor, (x, y) = win32gui.GetCursorInfo()
+        
+        # Adjust coordinate relative to the extended monitor if needed
+        # dxcam returns the frame of the specific monitor, but GetCursorInfo is global.
+        # Check if cursor is roughly within the capture area (logic simplified for speed)
+        
+        # Simple Logic: Draw cursor at global (x,y) minus monitor offset
+        # Note: Untuk implementasi sempurna, kita butuh tahu offset monitor virtual.
+        # Di sini kita asumsi cursor *sudah* di area monitor yang benar jika user melihatnya.
+        # Jika offset_x/y diperlukan (misal monitor 2 ada di kanan monitor 1), 
+        # kita harus pass offset tersebut. 
+        # Untuk sekarang kita gambar saja di posisi relatif (x, y) yang dikirim dari win32gui
+        # (Perlu dikurangi offset monitor jika tidak 0,0)
+        
+        # NOTE: Tanpa 'enum_display_monitors', kita sulit tahu offset pasti secara otomatis via dxcam saja.
+        # User mungkin perlu manual adjust atau kita pakai logic sederhana dulu.
+        
+        # Gambar lingkaran merah sebagai kursor (lebih cepat dari poligon)
+        # cv2.circle(frame, (x, y), 5, (0, 0, 255), -1)
+        
+        # Jika ingin bentuk panah:
+        cursor_points = np.array([[0, 0], [0, 20], [5, 15], [12, 22], [14, 20], [7, 12], [15, 12]], np.int32)
+        
+        # WARNING: offset_x dan offset_y harus diisi manual atau didapat dari win32api.GetMonitorInfo
+        # Misal Monitor 1 width 1920. Maka Monitor 2 mulai di x=1920.
+        # Kita perlu kurangi x dengan 1920 agar kursor muncul di frame monitor 2.
+        
+        # Placeholder logic: Gambar saja di posisi relatif frame
+        # (Akan geser jika monitor virtual ada offset)
+        pass 
+
     except:
-        pass # Abaikan jika mouse keluar batas array gambar
+        pass
+    return frame
 
-def start_server():
-    # Inisialisasi Socket TCP
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    # Disable Nagle's algorithm for lower latency
-    server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+def wait_for_handshake():
+    """Menunggu client mengirim 'HELLO' via UDP agar server tahu IP client"""
+    global client_addr
+    print(f"[INFO] Menunggu ping dari Client di port {PORT}...")
+    while client_addr is None and running:
+        try:
+            data, addr = server_socket.recvfrom(1024)
+            if data.startswith(b'HELLO'):
+                client_addr = addr
+                print(f"[INFO] Client ditemukan: {addr}")
+        except:
+            pass
+        time.sleep(0.1)
+
+def start_stream():
+    global client_addr
+    print("[INFO] Memulai streaming (Tekan Ctrl+C untuk Stop)...")
     
-    try:
-        server_socket.bind((HOST_IP, PORT))
-    except OSError as e:
-        # Check for specific Windows error 10048 (Address already in use)
-        if hasattr(e, 'winerror') and e.winerror == 10048:
-            print(f"[ERROR] Port {PORT} sudah digunakan!")
-            print("Solusi: 1) Tutup program lain yang pakai port ini")
-            print("        2) Ganti PORT di kode (misal: PORT = 9998)")
-            print(f"        3) Jalankan: taskkill /F /PID [PID dari 'netstat -ano | findstr :{PORT}']")
-        else:
-            print(f"[ERROR] Bind failed: {e}")
-        return
-    
-    server_socket.listen(5)
-    print(f"[INFO] Server berjalan di port {PORT}. Menunggu Client...")
+    # Mulai capture (Targetkan 60 FPS)
+    camera.start(target_fps=60, video_mode=True)
 
-    client_socket, addr = server_socket.accept()
-    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # Also set on accepted socket
-    print(f"[INFO] Terhubung dengan: {addr}")
+    # Dapatkan info monitor untuk offset kursor (Manual dulu jika API kompleks)
+    # Asumsi umum: Monitor 2 ada di sebelah kanan Monitor 1 (width=1920)
+    # Jika cursor tidak pas, user bisa sesuaikan OFFSET_X ini.
+    # OFFSET_X = 1920 
+    # OFFSET_Y = 0
 
-    try:
-        with mss.mss() as sct:
-            # Debug: Print all monitors
-            print(f"[DEBUG] Total monitors detected: {len(sct.monitors)}")
-            for i, monitor in enumerate(sct.monitors):
-                print(f"[DEBUG] Monitor {i}: {monitor}")
-            
-            # PENTING: sct.monitors[0] adalah semua layar digabung
-            # sct.monitors[1] adalah layar utama (ASUS)
-            # sct.monitors[2] adalah layar virtual (Extend) -> Target kita
-            
-            # Cek apakah monitor ke-2 ada
-            if len(sct.monitors) < 3:
-                print("[ERROR] Monitor Virtual tidak terdeteksi!")
-                print("[ERROR] Pastikan VDD driver sudah terinstall dan monitor virtual aktif!")
-                target_monitor = sct.monitors[1]  # Fallback
+    frame_count = 0
+    while running:
+        if client_addr is None:
+            time.sleep(0.5)
+            continue
+
+        # 1. Ambil Frame dari GPU (Non-blocking)
+        frame = camera.get_latest_frame()
+        if frame is None:
+            continue
+
+        # 2. Resize (Sangat penting untuk mengurangi lag jaringan)
+        # Frame asli mungkin 1920x1080 atau 1366x768. Resize ke 1280x720 atau lebih kecil.
+        frame = cv2.resize(frame, (WIDTH, HEIGHT))
+
+        # 3. Gambar Kursor (Opsional - logic offset perlu disempurnakan)
+        # frame = draw_cursor(frame)
+        
+        # Gambar kursor simple (Global position) using win32gui
+        try:
+             flags, hcursor, (gx, gy) = win32gui.GetCursorInfo()
+             # Manual Offset Hack: Jika monitor 2 ada di kanan (x > 1920)
+             # Kita perlu tahu offset monitor yang sedang dicapture dxcam.
+             # Dxcam tidak memberitahu offset global secara langsung di object camera, 
+             # tapi kita bisa hitung relatif.
+             # Untuk "Barrier" cursor visualizer yang SANGAT PRESISI, perlu logic monitor detection lagi.
+             # Untuk MVP, kita skip gambar kursor via OpenCV server-side jika DXCam menangkap layar penuh,
+             # karena kursor Windows asli biasanya SUDAH TER-RENDER oleh DXGI jika hardware cursor enabled?
+             # TAPI DXGI seringnya tidak capture hardware cursor.
+             
+             # Kita gambar titik simple untuk indikator
+             # Asumsi monitor extend ada di sebelah kanan monitor primary FHD (1920 width)
+             rel_x = gx - 1920 
+             rel_y = gy
+             
+             if 0 <= rel_x < WIDTH and 0 <= rel_y < HEIGHT:
+                 cv2.circle(frame, (rel_x, rel_y), 5, (0, 0, 255), -1)
+        except:
+            pass
+
+        # 4. Encode ke JPEG code 'turbo' check
+        # Quality 50-70 cukup untuk video gerak
+        _, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+        
+        # 5. Pecah paket UDP (Max 60k bytes per paket agar aman)
+        data = encoded.tobytes()
+        
+        # Kirim via UDP (Fire and Forget)
+        # Packet fragmentation manual diperlukan jika > 60k
+        # Tapi untuk latency rendah, lebih baik drop frame besar daripada fragmentasi (bikin lag/artifact)
+        try:
+            if len(data) < 62000:
+                # Tambahkan header simple (L = ulong size = 4 bytes)
+                # Client harus baca 4 bytes dulu
+                server_socket.sendto(struct.pack("L", len(data)) + data, client_addr)
             else:
-                target_monitor = sct.monitors[2]
-                print(f"[INFO] Using virtual monitor: {target_monitor}")
+                # Frame terlalu besar untuk satu paket UDP. 
+                # Opsional: Implementasi fragmentasi atau abaikan.
+                # Kita abaikan demi speed (Client akan skip frame ini)
+                # print("[WARN] Frame dropped (Too big for UDP)")
+                pass
+        except Exception as e:
+            pass # UDP Packet loss expected
 
-            # Ambil koordinat offset monitor target (Penting untuk kalkulasi mouse)
-            mon_top = target_monitor["top"]
-            mon_left = target_monitor["left"]
-            mon_width = target_monitor["width"]
-            mon_height = target_monitor["height"]
+    camera.stop()
+    server_socket.close()
 
-            frame_count = 0
-            while True:
-                # 1. Tangkap Layar
-                img = np.array(sct.grab(target_monitor))
-                
-                if img.size == 0:
-                    print("[ERROR] Captured image is empty!")
-                    time.sleep(0.01) # Short sleep to prevent CPU spin
-                    continue
-
-                # 2. Hapus channel Alpha (Transparansi) biar ringan (BGRA -> BGR)
-                frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-
-                # 3. Ambil Posisi Mouse Global di Windows
-                # Menggunakan win32api agar akurat & cepat
-                try:
-                    flags, hcursor, (global_x, global_y) = win32gui.GetCursorInfo()
-                    
-                    # 4. Cek apakah Mouse berada di dalam area Monitor Virtual
-                    if (mon_left <= global_x < mon_left + mon_width) and \
-                       (mon_top <= global_y < mon_top + mon_height):
-                        
-                        # Hitung posisi relatif mouse terhadap monitor virtual
-                        rel_x = global_x - mon_left
-                        rel_y = global_y - mon_top
-                        
-                        # 5. Gambar Kursor Manual (Inject) ke dalam Video
-                        draw_cursor(frame, rel_x, rel_y)
-                except Exception as e:
-                    # Ignore mouse errors to keep stream running
-                    pass
-
-                # 6. Kompresi JPEG severity - LOWERED QUALITY FOR SPEED
-                # Quality 50-70 is usually a good sweet spot for latency vs quality
-                result, encoded_frame = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-                
-                if not result:
-                    print("[ERROR] Failed to encode frame!")
-                    continue
-
-                # 7. Serialisasi data - REMOVED PICKLE
-                # Direct bytes is faster
-                data = encoded_frame.tobytes()
-                
-                # Debug info occasionally
-                frame_count += 1
-                if frame_count % 60 == 0:
-                     pass # Reduce spam
-                
-                # 8. Kirim ukuran data (Header) + Data (Payload)
-                # "!Q" ensures consistent 8-byte size across all platforms (network byte order)
-                message_size = struct.pack("!Q", len(data)) 
-                
-                try:
-                    client_socket.sendall(message_size + data)
-                except (BrokenPipeError, ConnectionResetError):
-                    print("[ERROR] Client disconnected!")
-                    break
-
+if __name__ == "__main__":
+    try:
+        # Jalankan handshake di thread terpisah
+        t = threading.Thread(target=wait_for_handshake, daemon=True)
+        t.start()
+        
+        start_stream()
     except KeyboardInterrupt:
-        print("\n[INFO] Server stopped by user")
-    except Exception as e:
-        print(f"[ERROR] Error utama: {e}")
-    finally:
-        client_socket.close()
-        server_socket.close()
-        print("[INFO] Server closed")
-
-if __name__ == '__main__':
-    start_server()
+        running = False
+        print("[INFO] Stopping...")

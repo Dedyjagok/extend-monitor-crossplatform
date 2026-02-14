@@ -2,88 +2,83 @@ import socket
 import cv2
 import struct
 import numpy as np
-import sys
 
-# Configuration
-SERVER_IP = '192.168.0.1'  # Change to Windows laptop IP
+# Konfigurasi
+SERVER_IP = '192.168.0.1' # IP Windows Virtual Display
 PORT = 9999
+MAX_DGRAM = 65535 # Max UDP packet size
 
 def start_client():
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # Added keepalive
-    # Disable Nagle's algorithm for lower latency
-    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    # Inisialisasi UDP Socket
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
+    # Perbesar Buffer Terima (PENTING untuk video stream)
     try:
-        print(f"[INFO] Connecting to {SERVER_IP}:{PORT}...")
-        client_socket.settimeout(10)  # 10 second timeout
-        client_socket.connect((SERVER_IP, PORT))
-        client_socket.settimeout(None)  # Remove timeout after connection
-        print("[INFO] Connected! Press 'q' or 'Esc' to exit.")
-    except socket.timeout:
-        print(f"[ERROR] Connection timeout. Check if server is running and IP is correct.")
-        return
+        client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, MAX_DGRAM * 10)
+    except:
+        print("[WARN] Gagal set SO_RCVBUF. Stream mungkin lag/putus.")
+    
+    # Timeout agar tidak hang selamanya
+    client_socket.settimeout(5) # 5 detik
+
+    # Handshake: Kirim 'HELLO' ke server agar server tahu IP kita
+    print(f"[INFO] Mengirim Hello ke Server {SERVER_IP}...")
+    try:
+        # Kirim beberapa kali untuk memastikan server terima
+        for _ in range(3):
+            client_socket.sendto(b'HELLO', (SERVER_IP, PORT))
     except Exception as e:
-        print(f"[ERROR] Connection failed: {e}")
+        print(f"[ERROR] Gagal kirim Hello: {e}")
         return
 
-    data = b""
-    payload_size = struct.calcsize("!Q")
+    cv2.namedWindow("Extender UDP", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("Extender UDP", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-    # Check if display is available (for headless systems)
-    try:
-        cv2.namedWindow("Extended Monitor", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("Extended Monitor", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    except Exception as e:
-        print(f"[ERROR] Cannot create window. Is X11 display available? {e}")
-        client_socket.close()
-        return
+    print("[INFO] Menunggu stream...")
+    frame_count = 0
+    
+    while True:
+        try:
+            # Terima paket UDP
+            packet, _ = client_socket.recvfrom(MAX_DGRAM + 100)
+            
+            # Parsing Header (4 bytes pertama adalah ukuran ulong - "L" = 4 bytes)
+            if len(packet) < 4: 
+                continue
+            
+            # Baca size
+            msg_size_bytes = packet[:4]
+            msg_size = struct.unpack("L", msg_size_bytes)[0]
+            
+            # Ambil data gambar
+            data = packet[4:]
 
-    try:
-        while True:
-            # Receive header
-            while len(data) < payload_size:
-                packet = client_socket.recv(4096)
-                if not packet:
-                    print("[INFO] Connection closed by server.")
-                    return
-                data += packet
+            # Validasi ukuran data
+            if len(data) != msg_size:
+                # Data rusak/terpotong (UDP packet loss)
+                continue
 
-            packed_msg_size = data[:payload_size]
-            data = data[payload_size:]
-            msg_size = struct.unpack("!Q", packed_msg_size)[0]
-            # print(f"[DEBUG] Expecting message size: {msg_size}")
-
-            # Receive payload
-            while len(data) < msg_size:
-                packet = client_socket.recv(4096)
-                if not packet:
-                    print("[INFO] Connection closed by server.")
-                    return
-                data += packet
-
-            frame_data = data[:msg_size]
-            data = data[msg_size:]
-
-            # Decode image - NO PICKLE (Faster)
-            # Convert raw bytes to numpy array then decode
-            frame_numpy = np.frombuffer(frame_data, dtype=np.uint8)
+            # Decode JPEG
+            frame_numpy = np.frombuffer(data, dtype=np.uint8)
             frame = cv2.imdecode(frame_numpy, cv2.IMREAD_COLOR)
 
             if frame is not None:
-                cv2.imshow("Extended Monitor", frame)
-            else:
-                print("[ERROR] Decoded frame is None!")
+                cv2.imshow("Extender UDP", frame)
+                frame_count += 1
             
-            key = cv2.waitKey(1)
-            if key == ord('q') or key == 27:
+            # Exit key
+            if cv2.waitKey(1) == 27: # ESC
                 break
+                
+        except socket.timeout:
+            print("[INFO] Timeout... Mengirim Hello lagi...")
+            client_socket.sendto(b'HELLO', (SERVER_IP, PORT))
+        except Exception as e:
+            # print(f"[ERROR] Recv: {e}")
+            pass
 
-    except Exception as e:
-        print(f"[ERROR] Error occurred: {e}")
-    finally:
-        client_socket.close()
-        cv2.destroyAllWindows()
+    client_socket.close()
+    cv2.destroyAllWindows()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     start_client()
