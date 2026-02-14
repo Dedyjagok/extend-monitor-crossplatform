@@ -27,7 +27,7 @@ def start_client():
         return
 
     data = b""
-    payload_size = struct.calcsize("L")
+    payload_size = struct.calcsize("!Q")
 
     # Check if display is available (for headless systems)
     try:
@@ -50,7 +50,8 @@ def start_client():
 
             packed_msg_size = data[:payload_size]
             data = data[payload_size:]
-            msg_size = struct.unpack("L", packed_msg_size)[0]
+            msg_size = struct.unpack("!Q", packed_msg_size)[0]
+            print(f"[DEBUG] Expecting message size: {msg_size}")
 
             # Receive payload
             while len(data) < msg_size:
@@ -69,6 +70,8 @@ def start_client():
 
             if frame is not None:
                 cv2.imshow("Extended Monitor", frame)
+            else:
+                print("[ERROR] Decoded frame is None!")
             
             key = cv2.waitKey(1)
             if key == ord('q') or key == 27:
