@@ -45,13 +45,19 @@ def start_client():
             # 1. Read Header (8 bytes for !Q size)
             header_data = recv_all(client_socket, 8)
             if not header_data:
+                print("[ERROR] Failed to receive header (Server disconnected?)")
                 break
             
-            msg_size = struct.unpack("!Q", header_data)[0]
+            try:
+                msg_size = struct.unpack("!Q", header_data)[0]
+            except Exception as e:
+                print(f"[ERROR] Failed to unpack header: {e}")
+                break
 
             # 2. Read Payload (Image Data)
             frame_data = recv_all(client_socket, msg_size)
             if not frame_data:
+                print(f"[ERROR] Failed to receive payload of size {msg_size}")
                 break
 
             # 3. Decode
@@ -60,8 +66,11 @@ def start_client():
 
             if frame is not None:
                 cv2.imshow("Extender TCP", frame)
+            else:
+                print("[WARN] Received empty/invalid frame")
             
             if cv2.waitKey(1) == 27: # ESC
+                print("[INFO] User pressed ESC")
                 break
 
     except Exception as e:
