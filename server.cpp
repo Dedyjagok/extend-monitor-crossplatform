@@ -19,10 +19,10 @@
 
 // Configuration
 const int PORT = 9999;
-const int TARGET_WIDTH = 960;
-const int TARGET_HEIGHT = 540;
+const int TARGET_WIDTH = 1280;
+const int TARGET_HEIGHT = 720;
 const int JPEG_QUALITY = 30;
-const int TARGET_MONITOR = 1; // 0 = primary, 1 = secondary
+const int TARGET_MONITOR = 0;
 
 // Byte order conversion for 64-bit integers
 inline uint64_t htonll(uint64_t value) {
@@ -57,78 +57,101 @@ public:
         Cleanup();
     }
 
-    bool Initialize(int monitor_index) {
+    bool Initialize(int target_monitor_index) {
         HRESULT hr;
-
-        // Create D3D11 Device
-        D3D_FEATURE_LEVEL feature_level;
-        hr = D3D11CreateDevice(
-            nullptr,
-            D3D_DRIVER_TYPE_HARDWARE,
-            nullptr,
-            0,
-            nullptr,
-            0,
-            D3D11_SDK_VERSION,
-            &d3d_device,
-            &feature_level,
-            &d3d_context
-        );
-
+        
+        // 1. Create DXGI Factory to enumerate adapters
+        IDXGIFactory1* factory = nullptr;
+        hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory);
         if (FAILED(hr)) {
-            std::cerr << "[ERROR] Failed to create D3D11 device: 0x" << std::hex << hr << std::endl;
+            std::cerr << "[ERROR] Failed to create DXGI Factory" << std::endl;
             return false;
         }
 
-        // Get DXGI Device
-        IDXGIDevice* dxgi_device = nullptr;
-        hr = d3d_device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgi_device);
-        if (FAILED(hr)) {
-            std::cerr << "[ERROR] Failed to get DXGI device" << std::endl;
-            return false;
+        int global_monitor_count = 0;
+        IDXGIAdapter1* adapter = nullptr;
+        IDXGIOutput* output = nullptr;
+        bool found = false;
+
+        // 2. Iterate Adapters
+        for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+            DXGI_ADAPTER_DESC1 adapter_desc;
+            adapter->GetDesc1(&adapter_desc);
+            // std::wcout << L"[INFO] Checking Adapter: " << adapter_desc.Description << std::endl;
+
+            // 3. Iterate Outputs on this Adapter
+            for (UINT j = 0; adapter->EnumOutputs(j, &output) != DXGI_ERROR_NOT_FOUND; ++j) {
+                if (global_monitor_count == target_monitor_index) {
+                    // FOUND IT!
+                    DXGI_OUTPUT_DESC output_desc;
+                    output->GetDesc(&output_desc);
+                    std::wcout << L"[SUCCESS] Found Monitor " << target_monitor_index << L" on " << adapter_desc.Description << std::endl;
+                    
+                    // 4. Create D3D11 Device for THIS Adapter
+                    D3D_FEATURE_LEVEL feature_level;
+                    hr = D3D11CreateDevice(
+                        adapter, // IMPORTANT: Use specific adapter
+                        D3D_DRIVER_TYPE_UNKNOWN, // Must be UNKNOWN when adapter is specified
+                        nullptr,
+                        0,
+                        nullptr,
+                        0,
+                        D3D11_SDK_VERSION,
+                        &d3d_device,
+                        &feature_level,
+                        &d3d_context
+                    );
+
+                    if (FAILED(hr)) {
+                        std::cerr << "[ERROR] Failed to create D3D11 Device for adapter: 0x" << std::hex << hr << std::endl;
+                        return false;
+                    }
+
+                    // 5. Duplicate Output
+                    IDXGIOutput1* output1 = nullptr;
+                    hr = output->QueryInterface(__uuidof(IDXGIOutput1), (void**)&output1);
+                    if (SUCCEEDED(hr)) {
+                        hr = output1->DuplicateOutput(d3d_device, &duplication);
+                        output1->Release();
+                        if (SUCCEEDED(hr)) {
+                            duplication->GetDesc(&dupl_desc);
+                            monitor_width = dupl_desc.ModeDesc.Width;
+                            monitor_height = dupl_desc.ModeDesc.Height;
+                            
+                            // Capture Top-Left coordinates
+                            monitor_left = output_desc.DesktopCoordinates.left;
+                            monitor_top = output_desc.DesktopCoordinates.top;
+                            
+                            found = true;
+                        } else {
+                             std::cerr << "[ERROR] DuplicateOutput failed: 0x" << std::hex << hr << std::endl;
+                             // E_ACCESSDENIED often means another app is capturing
+                        }
+                    }
+                    
+                    break; // Break output loop
+                }
+                global_monitor_count++;
+                output->Release();
+                output = nullptr;
+            }
+            
+            if (found) {
+                output->Release(); // Release the successful output
+                adapter->Release(); 
+                break; // Break adapter loop
+            }
+            adapter->Release();
+            adapter = nullptr;
         }
+        factory->Release();
 
-        // Get DXGI Adapter
-        IDXGIAdapter* dxgi_adapter = nullptr;
-        hr = dxgi_device->GetAdapter(&dxgi_adapter);
-        dxgi_device->Release();
-        if (FAILED(hr)) {
-            std::cerr << "[ERROR] Failed to get DXGI adapter" << std::endl;
-            return false;
+        if (!found) {
+             std::cerr << "[ERROR] Monitor Index " << target_monitor_index << " not found!" << std::endl;
+             std::cerr << "[INFO] Total monitors found: " << global_monitor_count << std::endl;
+             return false;
         }
-
-        // Enumerate outputs (monitors)
-        IDXGIOutput* dxgi_output = nullptr;
-        hr = dxgi_adapter->EnumOutputs(monitor_index, &dxgi_output);
-        dxgi_adapter->Release();
-        if (FAILED(hr)) {
-            std::cerr << "[ERROR] Failed to get monitor " << monitor_index 
-                      << " (0x" << std::hex << hr << ")" << std::endl;
-            return false;
-        }
-
-        // Get Output1 interface
-        IDXGIOutput1* dxgi_output1 = nullptr;
-        hr = dxgi_output->QueryInterface(__uuidof(IDXGIOutput1), (void**)&dxgi_output1);
-        dxgi_output->Release();
-        if (FAILED(hr)) {
-            std::cerr << "[ERROR] Failed to get IDXGIOutput1" << std::endl;
-            return false;
-        }
-
-        // Create Desktop Duplication
-        hr = dxgi_output1->DuplicateOutput(d3d_device, &duplication);
-        dxgi_output1->Release();
-        if (FAILED(hr)) {
-            std::cerr << "[ERROR] Failed to create desktop duplication: 0x" << std::hex << hr << std::endl;
-            std::cerr << "[INFO] Make sure no other capture tool is running" << std::endl;
-            return false;
-        }
-
-        duplication->GetDesc(&dupl_desc);
-        monitor_width = dupl_desc.ModeDesc.Width;
-        monitor_height = dupl_desc.ModeDesc.Height;
-
+        
         std::cout << "[SUCCESS] GPU Capture initialized: " << monitor_width << "x" << monitor_height << std::endl;
 
         // Create staging texture for CPU readback
@@ -219,6 +242,12 @@ public:
 
     int GetWidth() const { return monitor_width; }
     int GetHeight() const { return monitor_height; }
+    int GetLeft() const { return monitor_left; }
+    int GetTop() const { return monitor_top; }
+
+private:
+    int monitor_left = 0;
+    int monitor_top = 0;
 };
 
 // Simple JPEG encoder stub (you'll need a real library like libjpeg-turbo)
@@ -236,6 +265,32 @@ bool EncodeJPEG(const std::vector<uint8_t>& bgra_data, int width, int height,
     }
     
     return true;
+}
+
+// Draw a simple cursor (Red Square 10x10)
+void DrawCursor(std::vector<uint8_t>& buffer, int width, int height, int offset_x, int offset_y) {
+    CURSORINFO ci = { 0 };
+    ci.cbSize = sizeof(ci);
+    if (GetCursorInfo(&ci)) {
+        if (ci.flags == CURSOR_SHOWING) {
+            int cx = ci.ptScreenPos.x - offset_x;
+            int cy = ci.ptScreenPos.y - offset_y;
+            
+            // Draw 10x10 red square
+            int size = 10;
+            for (int y = cy - size/2; y < cy + size/2; y++) {
+                for (int x = cx - size/2; x < cx + size/2; x++) {
+                    if (x >= 0 && x < width && y >= 0 && y < height) {
+                        int idx = (y * width + x) * 4;
+                        buffer[idx + 0] = 0;   // B
+                        buffer[idx + 1] = 0;   // G
+                        buffer[idx + 2] = 255; // R
+                        buffer[idx + 3] = 255; // A
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Simple bilinear downscale
@@ -262,9 +317,16 @@ void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     std::cout << "[INFO] High-Performance Monitor Extender Server (C++)" << std::endl;
-    std::cout << "[INFO] Target: Monitor " << TARGET_MONITOR << std::endl;
+    
+    int selected_monitor = 1; // Default to 1 (Extended)
+    if (argc > 1) {
+        selected_monitor = std::atoi(argv[1]);
+        std::cout << "[INFO] Target Monitor Override: " << selected_monitor << std::endl;
+    } else {
+        std::cout << "[INFO] Default Target: Monitor 1 (Extended)" << std::endl;
+    }
 
     // Initialize Winsock
     WSADATA wsa_data;
@@ -274,11 +336,21 @@ int main() {
     }
 
     // Initialize Desktop Duplication
+    // Initialize Desktop Duplication
     DesktopDuplicator duplicator;
-    if (!duplicator.Initialize(TARGET_MONITOR)) {
-        std::cerr << "[FATAL] Failed to initialize desktop capture" << std::endl;
-        WSACleanup();
-        return 1;
+    
+    if (duplicator.Initialize(selected_monitor)) {
+        std::cout << "[SUCCESS] Initialized Capture on Monitor " << selected_monitor << " (Extended)" << std::endl;
+    } else {
+        std::cerr << "[WARN] Failed to initialize Monitor " << selected_monitor << ". Falling back to 0 (Main)..." << std::endl;
+        selected_monitor = 0;
+        if (duplicator.Initialize(selected_monitor)) {
+            std::cout << "[SUCCESS] Initialized Capture on Monitor " << selected_monitor << " (Main)" << std::endl;
+        } else {
+            std::cerr << "[FATAL] Failed to initialize desktop capture on ANY monitor" << std::endl;
+            WSACleanup();
+            return 1;
+        }
     }
 
     // Create TCP socket
@@ -342,6 +414,10 @@ int main() {
             if (!duplicator.CaptureFrame(frame_bgra)) {
                 continue; // No new frame, try again
             }
+
+            // Draw Cursor
+            DrawCursor(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(), 
+                       duplicator.GetLeft(), duplicator.GetTop());
 
             // Resize
             ResizeBGRA(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(),
