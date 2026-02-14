@@ -159,10 +159,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Create texture for streaming (BGR format to match server)
+    // Create texture for streaming (RGB format)
     SDL_Texture* texture = SDL_CreateTexture(
         renderer,
-        SDL_PIXELFORMAT_BGR24,
+        SDL_PIXELFORMAT_RGB24,
         SDL_TEXTUREACCESS_STREAMING,
         SCREEN_WIDTH,
         SCREEN_HEIGHT
@@ -241,7 +241,7 @@ int main(int argc, char* argv[]) {
             SDL_DestroyTexture(texture);
             texture = SDL_CreateTexture(
                 renderer,
-                SDL_PIXELFORMAT_BGR24,
+                SDL_PIXELFORMAT_RGB24,
                 SDL_TEXTUREACCESS_STREAMING,
                 frame_width,
                 frame_height

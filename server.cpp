@@ -252,17 +252,17 @@ private:
 };
 
 // Simple JPEG encoder stub (you'll need a real library like libjpeg-turbo)
-// For now, this will send raw BGR data - integrate libjpeg-turbo for production
+// For now, this will send raw RGB data - integrate libjpeg-turbo for production
 bool EncodeJPEG(const std::vector<uint8_t>& bgra_data, int width, int height, 
                 std::vector<uint8_t>& jpeg_data, int quality) {
     // PLACEHOLDER: This is where you'd use libjpeg-turbo
-    // For demonstration, we'll send raw BGR (convert BGRA to BGR)
+    // For demonstration, we'll send raw RGB (convert BGRA to RGB)
     jpeg_data.resize(width * height * 3);
     
     for (int i = 0; i < width * height; i++) {
-        jpeg_data[i * 3 + 0] = bgra_data[i * 4 + 0]; // B
+        jpeg_data[i * 3 + 0] = bgra_data[i * 4 + 2]; // R
         jpeg_data[i * 3 + 1] = bgra_data[i * 4 + 1]; // G
-        jpeg_data[i * 3 + 2] = bgra_data[i * 4 + 2]; // R
+        jpeg_data[i * 3 + 2] = bgra_data[i * 4 + 0]; // B
     }
     
     return true;
