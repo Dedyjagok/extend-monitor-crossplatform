@@ -18,7 +18,7 @@ HEIGHT = 540
 camera = None
 sct = None
 TARGET_MONITOR_IDX = 1 # 0=All, 1=Main, 2=Secondary (in MSS)
-FORCE_GPU_INDEX = -1   # Set to 0, 1, etc. to FORCE specific GPU. -1 = Auto.
+FORCE_GPU_INDEX = 1    # FORCED to Device 1 (RTX 2050)
 monitor_info = {"top": 0, "left": 0, "width": 1920, "height": 1080}
 
 # DXCam (GPU Capture)
@@ -53,40 +53,54 @@ def init_camera():
     if DXCAM_AVAILABLE and len(monitors) > 2:
         print(f"\n[INFO] --- Scanning GPUs for Extended Monitor ---")
         
-        # A. Manual Override
+        # A. Manual Override with better error handling
         if FORCE_GPU_INDEX != -1:
             print(f"[INFO] FORCING GPU Device {FORCE_GPU_INDEX} (User Override)...")
-            try:
-                # Try to force connection
-                camera = dxcam.create(device_idx=FORCE_GPU_INDEX, output_idx=1, output_color="BGR")
-                print(f"[SUCCESS] Forced connection to Device {FORCE_GPU_INDEX} successful!")
-                print(f"[SUCCESS] [GPU ACTIVE] Using Device {FORCE_GPU_INDEX} (Output 1)")
-                return True
-            except Exception as e:
-                print(f"[ERROR] Forced connection failed: {e}")
-                print("Reverting to Auto-Scan...")
+            # Try different output indices (0 and 1)
+            for output_idx in [1, 0]:
+                try:
+                    print(f"  > Trying Device {FORCE_GPU_INDEX}, Output {output_idx}...")
+                    temp_camera = dxcam.create(device_idx=FORCE_GPU_INDEX, output_idx=output_idx, output_color="BGR")
+                    
+                    # Test if we can capture a frame
+                    test_frame = temp_camera.grab()
+                    if test_frame is not None and test_frame.shape[0] > 0:
+                        print(f"[SUCCESS] Forced connection successful!")
+                        print(f"[SUCCESS] [GPU ACTIVE] Using Device {FORCE_GPU_INDEX} (Output {output_idx})")
+                        print(f"    Captured test frame: {test_frame.shape[1]}x{test_frame.shape[0]}")
+                        camera = temp_camera
+                        return True
+                    else:
+                        temp_camera.release()
+                        print(f"    [FAILED] Output {output_idx}: Could not capture frame")
+                except Exception as e:
+                    print(f"    [FAILED] Output {output_idx}: {e}")
+                    
+            print(f"[ERROR] Could not connect to Device {FORCE_GPU_INDEX} on any output")
+            print("Reverting to Auto-Scan...")
 
-        # B. Auto-Scan
+        # B. Auto-Scan with better detection
         found_cameras = {}
         
-        # Scan devices 0-3
+        # Scan devices 0-3, trying both output indices
         for device_idx in range(4):
-            try:
-                # HEURISTIC: Try Output 1 (Extended)
-                # Output 0 is usually Main, Output 1 is usually Extended
-                # output_color="BGR" fixed blue tint
-                print(f"[INFO] Checking GPU Device {device_idx}...")
-                
-                # Create camera
+            print(f"[INFO] Checking GPU Device {device_idx}...")
+            
+            for output_idx in [1, 0]:  # Try extended monitor output first
                 try:
-                    temp_cam = dxcam.create(device_idx=device_idx, output_idx=1, output_color="BGR")
-                    # If no exception, we found it!
-                    print(f"  > [SUCCESS] Monitor FOUND on Device {device_idx}")
-                    found_cameras[device_idx] = temp_cam
-                except:
+                    temp_cam = dxcam.create(device_idx=device_idx, output_idx=output_idx, output_color="BGR")
+                    
+                    # Test capture
+                    test_frame = temp_cam.grab()
+                    if test_frame is not None and test_frame.shape[0] > 0:
+                        print(f"  > [SUCCESS] Monitor FOUND on Device {device_idx}, Output {output_idx}")
+                        print(f"    Resolution: {test_frame.shape[1]}x{test_frame.shape[0]}")
+                        found_cameras[(device_idx, output_idx)] = temp_cam
+                        break  # Found working output for this device
+                    else:
+                        temp_cam.release()
+                except Exception as e:
                     pass
-            except:
-                pass
 
         # SELECT THE BEST GPU
         if not found_cameras:
@@ -94,25 +108,34 @@ def init_camera():
             print("  -> Your Virtual Display Driver might be software-only.")
         else:
             # User prefers Device 1 (RTX), so check if we have it
-            selected_idx = -1
+            selected_key = None
             
             # Logic: If we found extended monitor on multiple GPUs, prefer Device 1
-            if 1 in found_cameras:
-                selected_idx = 1
-                print(f"[SUCCESS] [dGPU PRIORITY] Selecting Device 1 (Likely RTX 2050)")
-            elif 0 in found_cameras:
-                selected_idx = 0
-                print(f"[SUCCESS] [iGPU] Selecting Device 0 (RTX not available for this Display)")
-            else:
-                selected_idx = list(found_cameras.keys())[0]
-                print(f"[SUCCESS] Selecting Device {selected_idx}")
+            for key in found_cameras.keys():
+                if key[0] == 1:  # Device 1
+                    selected_key = key
+                    print(f"[SUCCESS] [dGPU PRIORITY] Selecting Device 1, Output {key[1]} (RTX 2050)")
+                    break
+            
+            # If Device 1 not found, try Device 0
+            if not selected_key:
+                for key in found_cameras.keys():
+                    if key[0] == 0:  # Device 0
+                        selected_key = key
+                        print(f"[SUCCESS] [iGPU] Selecting Device 0, Output {key[1]} (RTX not available for this Display)")
+                        break
+            
+            # If neither 0 nor 1, pick the first one
+            if not selected_key:
+                selected_key = list(found_cameras.keys())[0]
+                print(f"[SUCCESS] Selecting Device {selected_key[0]}, Output {selected_key[1]}")
 
             # Set global camera
-            camera = found_cameras[selected_idx]
+            camera = found_cameras[selected_key]
             
             # Release others
-            for idx, cam in found_cameras.items():
-                if idx != selected_idx:
+            for key, cam in found_cameras.items():
+                if key != selected_key:
                     try:
                         cam.stop()
                         cam.release()
