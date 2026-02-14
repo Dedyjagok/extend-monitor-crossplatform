@@ -20,18 +20,9 @@ HOST_IP = '0.0.0.0'
 PORT = 9999
 WIDTH, HEIGHT = 1280, 720 # Target Resolution
 
-# Inisialisasi UDP Socket
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-try:
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65535)
-except:
-    pass
-
 # Global Variables
 camera = None
 sct = None
-client_addr = None
-running = True
 TARGET_MONITOR_IDX = 1 
 
 def init_camera():
@@ -80,25 +71,21 @@ def get_frame():
             return None
     return None
 
-def wait_for_handshake():
-    """Menunggu client mengirim 'HELLO' via UDP agar server tahu IP client"""
-    global client_addr
-    print(f"[INFO] Listening for Client Handshake on {HOST_IP}:{PORT}...")
-    while client_addr is None and running:
-        try:
-            data, addr = server_socket.recvfrom(1024)
-            print(f"[DEBUG] Received data from {addr}: {data}")
-            if data.startswith(b'HELLO'):
-                client_addr = addr
-                print(f"[INFO] === Client CONNECTED: {addr} ===")
-                # Send ack back
-                server_socket.sendto(b'ACK', addr)
-        except Exception as e:
-            # print(f"Handshake error: {e}")
-            pass
-        time.sleep(0.1)
+def start_server():
+    # Inisialisasi TCP Socket
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # Low latency
 
-def start_stream():
+    try:
+        server_socket.bind((HOST_IP, PORT))
+    except Exception as e:
+        print(f"[ERROR] Bind failed: {e}")
+        return
+
+    server_socket.listen(1)
+    print(f"[INFO] TCP Server listening on {HOST_IP}:{PORT}")
+
     if not init_camera():
         print("[FATAL] Could not initialize any capture method.")
         return
@@ -109,63 +96,66 @@ def start_stream():
     else:
         print("[INFO] Starting MSS Capture...")
 
-    print(f"[INFO] Stream Ready. Waiting for client at {PORT}...")
+    try:
+        while True:
+            print("[INFO] Waiting for client connection...")
+            client_socket, addr = server_socket.accept()
+            print(f"[INFO] Client connected from: {addr}")
+            
+            # Low latency settings for client socket
+            client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-    # Wait until client connects
-    while client_addr is None and running:
-        time.sleep(1)
-        print("[INFO] Waiting for client connection...")
+            try:
+                frame_count = 0
+                while True:
+                    # 1. Capture
+                    frame = get_frame()
+                    if frame is None:
+                        time.sleep(0.001) # Ultra short sleep
+                        continue
 
-    print("[INFO] Streaming started!")
-    
-    frame_count = 0
-    while running:
-        if client_addr is None:
-            time.sleep(0.5)
-            continue
+                    # 2. Resize
+                    frame = cv2.resize(frame, (WIDTH, HEIGHT))
 
-        # 1. Capture
-        frame = get_frame()
-        if frame is None:
-            time.sleep(0.01)
-            continue
+                    # 3. Draw Cursor using win32gui
+                    try:
+                        flags, hcursor, (gx, gy) = win32gui.GetCursorInfo()
+                        # Manual Offset Hack: Adjust based on your setup
+                        # Assuming Monitor 2 is to the right of Monitor 1 (1920x1080)
+                        rel_x = gx - 1920 
+                        rel_y = gy
+                        
+                        if 0 <= rel_x < WIDTH and 0 <= rel_y < HEIGHT:
+                            cv2.circle(frame, (rel_x, rel_y), 5, (0, 0, 255), -1)
+                    except:
+                        pass
 
-        # 2. Resize
-        frame = cv2.resize(frame, (WIDTH, HEIGHT))
+                    # 4. Encode
+                    # Quality 60 is a good balance for speed/size
+                    _, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                    data = encoded.tobytes()
+                    
+                    # 5. Send TCP (8-byte header + payload)
+                    # !Q = unsigned long long (8 bytes)
+                    msg_size = struct.pack("!Q", len(data))
+                    client_socket.sendall(msg_size + data)
+                    
+                    frame_count += 1
+                    
+            except (ConnectionResetError, BrokenPipeError):
+                print("[INFO] Client disconnected")
+            except Exception as e:
+                print(f"[ERROR] Stream error: {e}")
+            finally:
+                client_socket.close()
 
-        # 3. Draw Cursor using win32gui
-        try:
-             flags, hcursor, (gx, gy) = win32gui.GetCursorInfo()
-             # Manual Offset Hack: Adjust based on your setup
-             rel_x = gx - 1920 
-             rel_y = gy
-             
-             if 0 <= rel_x < WIDTH and 0 <= rel_y < HEIGHT:
-                 cv2.circle(frame, (rel_x, rel_y), 5, (0, 0, 255), -1)
-        except:
-            pass
-
-        # 4. Encode
-        _, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-        data = encoded.tobytes()
-        
-        # 5. Send UDP
-        try:
-            if len(data) < 62000:
-                server_socket.sendto(struct.pack("L", len(data)) + data, client_addr)
-        except Exception as e:
-            pass 
-
-    if DXCAM_AVAILABLE:
-        camera.stop()
-    server_socket.close()
-    print("[INFO] Server Stopped")
+    except KeyboardInterrupt:
+        print("[INFO] Server stopping...")
+    finally:
+        if DXCAM_AVAILABLE:
+            camera.stop()
+        server_socket.close()
+        print("[INFO] Server closed")
 
 if __name__ == "__main__":
-    try:
-        t = threading.Thread(target=wait_for_handshake, daemon=True)
-        t.start()
-        start_stream()
-    except KeyboardInterrupt:
-        running = False
-        print("[INFO] Keyboard Interrupt")
+    start_server()
