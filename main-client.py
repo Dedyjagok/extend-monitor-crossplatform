@@ -3,10 +3,16 @@ import cv2
 import struct
 import numpy as np
 
+import sys
+
 # Konfigurasi
-SERVER_IP = '192.168.0.1' # IP Windows Virtual Display
+SERVER_IP = '192.168.0.1' # Default, will be overwritten by args
 PORT = 9999
-MAX_DGRAM = 65535 # Max UDP packet size
+MAX_DGRAM = 65535
+
+# Check command line args for IP
+if len(sys.argv) > 1:
+    SERVER_IP = sys.argv[1]
 
 def start_client():
     # Inisialisasi UDP Socket
