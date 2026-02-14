@@ -68,6 +68,7 @@ int main(int argc, char* argv[]) {
     const char* server_ip = argv[1];
 
     std::cout << "[INFO] Monitor Extender Client (C++)" << std::endl;
+    std::cout << "[INFO] Protocol Version: " << PROTOCOL_VERSION << std::endl;
     std::cout << "[INFO] Connecting to " << server_ip << ":" << PORT << std::endl;
 
 #ifdef _WIN32
@@ -157,10 +158,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Create texture for streaming
+    // Create texture for streaming (BGR format to match server)
     SDL_Texture* texture = SDL_CreateTexture(
         renderer,
-        SDL_PIXELFORMAT_RGB24,
+        SDL_PIXELFORMAT_BGR24,
         SDL_TEXTUREACCESS_STREAMING,
         SCREEN_WIDTH,
         SCREEN_HEIGHT
@@ -239,7 +240,7 @@ int main(int argc, char* argv[]) {
             SDL_DestroyTexture(texture);
             texture = SDL_CreateTexture(
                 renderer,
-                SDL_PIXELFORMAT_RGB24,
+                SDL_PIXELFORMAT_BGR24,
                 SDL_TEXTUREACCESS_STREAMING,
                 frame_width,
                 frame_height

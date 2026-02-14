@@ -18,6 +18,7 @@
 #pragma comment(lib, "dxgi.lib")
 
 // Configuration
+const char* PROTOCOL_VERSION = "v2.0-Magic";
 const int PORT = 9999;
 const int TARGET_WIDTH = 1280;
 const int TARGET_HEIGHT = 720;
@@ -251,17 +252,17 @@ private:
 };
 
 // Simple JPEG encoder stub (you'll need a real library like libjpeg-turbo)
-// For now, this will send raw RGB data - integrate libjpeg-turbo for production
+// For now, this will send raw BGR data - integrate libjpeg-turbo for production
 bool EncodeJPEG(const std::vector<uint8_t>& bgra_data, int width, int height, 
                 std::vector<uint8_t>& jpeg_data, int quality) {
     // PLACEHOLDER: This is where you'd use libjpeg-turbo
-    // For demonstration, we'll send raw RGB (convert BGRA to RGB)
+    // For demonstration, we'll send raw BGR (convert BGRA to BGR)
     jpeg_data.resize(width * height * 3);
     
     for (int i = 0; i < width * height; i++) {
-        jpeg_data[i * 3 + 0] = bgra_data[i * 4 + 2]; // R
+        jpeg_data[i * 3 + 0] = bgra_data[i * 4 + 0]; // B
         jpeg_data[i * 3 + 1] = bgra_data[i * 4 + 1]; // G
-        jpeg_data[i * 3 + 2] = bgra_data[i * 4 + 0]; // B
+        jpeg_data[i * 3 + 2] = bgra_data[i * 4 + 2]; // R
     }
     
     return true;
@@ -319,6 +320,7 @@ void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
 
 int main(int argc, char* argv[]) {
     std::cout << "[INFO] High-Performance Monitor Extender Server (C++)" << std::endl;
+    std::cout << "[INFO] Protocol Version: " << PROTOCOL_VERSION << std::endl;
     
     int selected_monitor = 1; // Default to 1 (Extended)
     if (argc > 1) {
