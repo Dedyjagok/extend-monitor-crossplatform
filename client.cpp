@@ -197,18 +197,46 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Receive frame size (8 bytes, network byte order)
-        uint64_t frame_size_net;
-        if (!RecvAll(client_socket, (char*)&frame_size_net, sizeof(frame_size_net))) {
-            std::cerr << "[ERROR] Failed to receive frame size" << std::endl;
+        // Receive Header: [Size (8)] [Width (4)] [Height (4)]
+        char header[16];
+        if (!RecvAll(client_socket, header, 16)) {
+            std::cerr << "[ERROR] Failed to receive header" << std::endl;
             break;
         }
 
+        // Parse Header
+        uint64_t frame_size_net;
+        memcpy(&frame_size_net, header, 8);
         uint64_t frame_size = ntohll(frame_size_net);
+
+        uint32_t width_net, height_net;
+        memcpy(&width_net, header + 8, 4);
+        memcpy(&height_net, header + 12, 4);
+        int frame_width = ntohl(width_net);
+        int frame_height = ntohl(height_net);
         
-        if (frame_size > 10 * 1024 * 1024) { // Sanity check: max 10MB
+        // Sanity check
+        if (frame_size > 50 * 1024 * 1024) { // Max 50MB
             std::cerr << "[ERROR] Invalid frame size: " << frame_size << std::endl;
             break;
+        }
+
+        // Check if texture needs update
+        int tex_w, tex_h;
+        SDL_QueryTexture(texture, nullptr, nullptr, &tex_w, &tex_h);
+        if (tex_w != frame_width || tex_h != frame_height) {
+            std::cout << "[INFO] Resizing Texture to: " << frame_width << "x" << frame_height << std::endl;
+            SDL_DestroyTexture(texture);
+            texture = SDL_CreateTexture(
+                renderer,
+                SDL_PIXELFORMAT_RGB24,
+                SDL_TEXTUREACCESS_STREAMING,
+                frame_width,
+                frame_height
+            );
+            
+            // Allow window to be resized if not fullscreen?
+            // For now, keep fullscreen but scale aspect ratio
         }
 
         // Receive frame data
@@ -219,7 +247,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Update texture (this assumes raw RGB data - modify if using JPEG)
-        SDL_UpdateTexture(texture, nullptr, frame_buffer.data(), SCREEN_WIDTH * 3);
+        SDL_UpdateTexture(texture, nullptr, frame_buffer.data(), frame_width * 3);
 
         // Render
         SDL_RenderClear(renderer);
