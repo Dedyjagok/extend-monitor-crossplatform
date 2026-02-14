@@ -197,21 +197,31 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Receive Header: [Size (8)] [Width (4)] [Height (4)]
-        char header[16];
-        if (!RecvAll(client_socket, header, 16)) {
+        // Receive Header: [MAGIC (4)] [Size (8)] [Width (4)] [Height (4)]
+        char header[20];
+        if (!RecvAll(client_socket, header, 20)) {
             std::cerr << "[ERROR] Failed to receive header" << std::endl;
             break;
         }
 
-        // Parse Header
+        // 1. Verify Magic
+        uint32_t magic_net;
+        memcpy(&magic_net, header, 4);
+        if (ntohl(magic_net) != 0xDEADBEEF) {
+            std::cerr << "[FATAL] PROTOCOL MISMATCH!" << std::endl;
+            std::cerr << "Server is sending invalid data. Please recompiling SERVER and CLIENT." << std::endl;
+            break;
+        }
+
+        // 2. Parse Size
         uint64_t frame_size_net;
-        memcpy(&frame_size_net, header, 8);
+        memcpy(&frame_size_net, header + 4, 8);
         uint64_t frame_size = ntohll(frame_size_net);
 
+        // 3. Parse Resolution
         uint32_t width_net, height_net;
-        memcpy(&width_net, header + 8, 4);
-        memcpy(&height_net, header + 12, 4);
+        memcpy(&width_net, header + 12, 4);
+        memcpy(&height_net, header + 16, 4);
         int frame_width = ntohl(width_net);
         int frame_height = ntohl(height_net);
         

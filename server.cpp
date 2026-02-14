@@ -426,19 +426,21 @@ int main(int argc, char* argv[]) {
             // Encode (placeholder - integrate libjpeg-turbo for real JPEG)
             EncodeJPEG(resized_bgra, TARGET_WIDTH, TARGET_HEIGHT, jpeg_data, JPEG_QUALITY);
 
-            // Send Header: [Size (8B)] [Width (4B)] [Height (4B)]
+            // Send Header: [MAGIC (4B)] [Size (8B)] [Width (4B)] [Height (4B)]
+            uint32_t magic_net = htonl(0xDEADBEEF);
             uint64_t size = jpeg_data.size();
             uint64_t size_net = htonll(size);
             uint32_t width_net = htonl(TARGET_WIDTH);
             uint32_t height_net = htonl(TARGET_HEIGHT);
             
-            // buffer for header
-            char header[16];
-            memcpy(header, &size_net, 8);
-            memcpy(header + 8, &width_net, 4);
-            memcpy(header + 12, &height_net, 4);
+            // buffer for header (20 bytes)
+            char header[20];
+            memcpy(header, &magic_net, 4);
+            memcpy(header + 4, &size_net, 8);
+            memcpy(header + 12, &width_net, 4);
+            memcpy(header + 16, &height_net, 4);
 
-            if (send(client_socket, header, 16, 0) == SOCKET_ERROR) {
+            if (send(client_socket, header, 20, 0) == SOCKET_ERROR) {
                 std::cerr << "[INFO] Client disconnected (send header failed)" << std::endl;
                 break;
             }
