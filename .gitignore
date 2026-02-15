@@ -43,3 +43,9 @@ desktop.ini
 
 # Logs
 *.log
+
+# Executables
+*.exe
+
+# assets
+assets/

@@ -12,6 +12,12 @@
 #include <chrono>
 #include <cstring>
 
+// STB Image library for loading cursor image
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
+#include "stb_image.h"
+
 // Link libraries
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -24,6 +30,15 @@ const int TARGET_WIDTH = 1280;
 const int TARGET_HEIGHT = 720;
 const int JPEG_QUALITY = 30;
 const int TARGET_MONITOR = 0;
+const char* CURSOR_IMAGE_PATH = "assets/cursor-point.jpeg";
+
+// Global cursor image data
+struct CursorImage {
+    uint8_t* data = nullptr;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+} g_cursorImage;
 
 // Byte order conversion for 64-bit integers
 inline uint64_t htonll(uint64_t value) {
@@ -268,7 +283,7 @@ bool EncodeJPEG(const std::vector<uint8_t>& bgra_data, int width, int height,
     return true;
 }
 
-// Draw a simple cursor (Red Square 10x10)
+// Draw cursor image (loaded from JPEG)
 void DrawCursor(std::vector<uint8_t>& buffer, int width, int height, int offset_x, int offset_y) {
     CURSORINFO ci = { 0 };
     ci.cbSize = sizeof(ci);
@@ -277,16 +292,43 @@ void DrawCursor(std::vector<uint8_t>& buffer, int width, int height, int offset_
             int cx = ci.ptScreenPos.x - offset_x;
             int cy = ci.ptScreenPos.y - offset_y;
             
-            // Draw 10x10 red square
-            int size = 10;
-            for (int y = cy - size/2; y < cy + size/2; y++) {
-                for (int x = cx - size/2; x < cx + size/2; x++) {
-                    if (x >= 0 && x < width && y >= 0 && y < height) {
-                        int idx = (y * width + x) * 4;
-                        buffer[idx + 0] = 0;   // B
-                        buffer[idx + 1] = 0;   // G
-                        buffer[idx + 2] = 255; // R
-                        buffer[idx + 3] = 255; // A
+            // If cursor image loaded, draw it
+            if (g_cursorImage.data && g_cursorImage.width > 0 && g_cursorImage.height > 0) {
+                // Draw cursor image centered on cursor position
+                int half_w = g_cursorImage.width / 2;
+                int half_h = g_cursorImage.height / 2;
+                
+                for (int y = 0; y < g_cursorImage.height; y++) {
+                    for (int x = 0; x < g_cursorImage.width; x++) {
+                        int screen_x = cx - half_w + x;
+                        int screen_y = cy - half_h + y;
+                        
+                        if (screen_x >= 0 && screen_x < width && screen_y >= 0 && screen_y < height) {
+                            int src_idx = (y * g_cursorImage.width + x) * g_cursorImage.channels;
+                            int dst_idx = (screen_y * width + screen_x) * 4;
+                            
+                            // Copy RGB from cursor image (JPEG doesn't have alpha, so use full opacity)
+                            if (g_cursorImage.channels >= 3) {
+                                buffer[dst_idx + 2] = g_cursorImage.data[src_idx + 0]; // R
+                                buffer[dst_idx + 1] = g_cursorImage.data[src_idx + 1]; // G
+                                buffer[dst_idx + 0] = g_cursorImage.data[src_idx + 2]; // B
+                                buffer[dst_idx + 3] = 255; // A
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Fallback: Draw 10x10 red square if image not loaded
+                int size = 10;
+                for (int y = cy - size/2; y < cy + size/2; y++) {
+                    for (int x = cx - size/2; x < cx + size/2; x++) {
+                        if (x >= 0 && x < width && y >= 0 && y < height) {
+                            int idx = (y * width + x) * 4;
+                            buffer[idx + 0] = 0;   // B
+                            buffer[idx + 1] = 0;   // G
+                            buffer[idx + 2] = 255; // R
+                            buffer[idx + 3] = 255; // A
+                        }
                     }
                 }
             }
@@ -325,6 +367,15 @@ void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
 int main(int argc, char* argv[]) {
     std::cout << "[INFO] High-Performance Monitor Extender Server (C++)" << std::endl;
     std::cout << "[INFO] Protocol Version: " << PROTOCOL_VERSION << std::endl;
+    
+    // Load custom cursor image
+    std::cout << "[INFO] Loading cursor image: " << CURSOR_IMAGE_PATH << std::endl;
+    g_cursorImage.data = stbi_load(CURSOR_IMAGE_PATH, &g_cursorImage.width, &g_cursorImage.height, &g_cursorImage.channels, 3);
+    if (g_cursorImage.data) {
+        std::cout << "[SUCCESS] Cursor loaded: " << g_cursorImage.width << "x" << g_cursorImage.height << " (" << g_cursorImage.channels << " channels)" << std::endl;
+    } else {
+        std::cerr << "[WARN] Failed to load cursor image. Using fallback red square." << std::endl;
+    }
     
     int selected_monitor = 1; // Default to 1 (Extended)
     if (argc > 1) {
