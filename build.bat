@@ -60,8 +60,9 @@ if %ERRORLEVEL% EQU 0 (
 )
 echo.
 
+
 :build_server
-echo [INFO] Building server...
+echo [INFO] Building server (console)...
 cl /std:c++17 /O2 /EHsc /Fe:server.exe server.cpp ^
    d3d11.lib dxgi.lib ws2_32.lib
 
@@ -69,6 +70,18 @@ if %ERRORLEVEL% EQU 0 (
     echo [SUCCESS] server.exe built successfully
 ) else (
     echo [ERROR] Server build failed
+)
+echo.
+
+echo [INFO] Building server-tray (system tray)...
+cl /std:c++17 /O2 /EHsc /Fe:server-tray.exe server-tray.cpp ^
+   d3d11.lib dxgi.lib ws2_32.lib shell32.lib user32.lib
+
+if %ERRORLEVEL% EQU 0 (
+    echo [SUCCESS] server-tray.exe built successfully
+    echo [INFO] Use server-tray.exe to run in system tray
+) else (
+    echo [ERROR] Server-tray build failed
 )
 echo.
 

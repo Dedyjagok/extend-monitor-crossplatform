@@ -230,7 +230,11 @@ int main(int argc, char* argv[]) {
         // Debug first frame
         static bool first_frame = true;
         if (first_frame) {
-            std::cout << "[DEBUG] Received: " << frame_width << "x" << frame_height << " (" << frame_size << " bytes, pitch=" << (frame_width * 3) << ")" << std::endl;
+            std::cout << "[DEBUG] First frame received:" << std::endl;
+            std::cout << "  Resolution: " << frame_width << "x" << frame_height << std::endl;
+            std::cout << "  Frame size: " << frame_size << " bytes" << std::endl;
+            std::cout << "  Expected size (RGB): " << (frame_width * frame_height * 3) << " bytes" << std::endl;
+            std::cout << "  Pitch: " << (frame_width * 3) << " bytes/row" << std::endl;
             first_frame = false;
         }
         
