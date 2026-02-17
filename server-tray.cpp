@@ -16,12 +16,6 @@
 #include <thread>
 #include <atomic>
 
-// STB Image library for loading cursor image
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_JPEG
-#define STBI_ONLY_PNG
-#include "stb_image.h"
-
 // Link libraries
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -35,15 +29,6 @@ const int PORT = 9999;
 const int TARGET_WIDTH = 1280;
 const int TARGET_HEIGHT = 720;
 const int JPEG_QUALITY = 30;
-const char* CURSOR_IMAGE_PATH = "assets/cursor-point.jpeg";
-
-// Global cursor image data
-struct CursorImage {
-    uint8_t* data = nullptr;
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-} g_cursorImage;
 
 // Tray Icon IDs
 #define WM_TRAYICON (WM_USER + 1)
@@ -255,40 +240,43 @@ void DrawCursor(std::vector<uint8_t>& buffer, int width, int height, int offset_
             int cx = ci.ptScreenPos.x - offset_x;
             int cy = ci.ptScreenPos.y - offset_y;
             
-            // If cursor image loaded, draw it
-            if (g_cursorImage.data && g_cursorImage.width > 0 && g_cursorImage.height > 0) {
-                // Draw cursor image centered on cursor position
-                int half_w = g_cursorImage.width / 2;
-                int half_h = g_cursorImage.height / 2;
-                
-                for (int y = 0; y < g_cursorImage.height; y++) {
-                    for (int x = 0; x < g_cursorImage.width; x++) {
-                        int screen_x = cx - half_w + x;
-                        int screen_y = cy - half_h + y;
-                        
-                        if (screen_x >= 0 && screen_x < width && screen_y >= 0 && screen_y < height) {
-                            int src_idx = (y * g_cursorImage.width + x) * g_cursorImage.channels;
-                            int dst_idx = (screen_y * width + screen_x) * 4;
-                            
-                            // Copy RGB from cursor image (JPEG doesn't have alpha, so use full opacity)
-                            if (g_cursorImage.channels >= 3) {
-                                buffer[dst_idx + 2] = g_cursorImage.data[src_idx + 0]; // R
-                                buffer [dst_idx + 1] = g_cursorImage.data[src_idx + 1]; // G
-                                buffer[dst_idx + 0] = g_cursorImage.data[src_idx + 2]; // B
-                                buffer[dst_idx + 3] = 255; // A
+            // Simple 11x17 arrow cursor pattern (white with black outline)
+            const int arrow_pattern[17][11] = {
+                {2,0,0,0,0,0,0,0,0,0,0},
+                {2,2,0,0,0,0,0,0,0,0,0},
+                {2,1,2,0,0,0,0,0,0,0,0},
+                {2,1,1,2,0,0,0,0,0,0,0},
+                {2,1,1,1,2,0,0,0,0,0,0},
+                {2,1,1,1,1,2,0,0,0,0,0},
+                {2,1,1,1,1,1,2,0,0,0,0},
+                {2,1,1,1,1,1,1,2,0,0,0},
+                {2,1,1,1,1,1,1,1,2,0,0},
+                {2,1,1,1,1,1,1,1,1,2,0},
+                {2,1,1,1,1,1,2,2,2,2,0},
+                {2,1,1,2,1,1,2,0,0,0,0},
+                {2,1,2,0,2,1,1,2,0,0,0},
+                {2,2,0,0,2,1,1,2,0,0,0},
+                {0,0,0,0,0,2,1,1,2,0,0},
+                {0,0,0,0,0,2,1,1,2,0,0},
+                {0,0,0,0,0,0,2,2,0,0,0}
+            };
+            
+            for (int y = 0; y < 17; y++) {
+                for (int x = 0; x < 11; x++) {
+                    int screen_x = cx + x;
+                    int screen_y = cy + y;
+                    
+                    if (screen_x >= 0 && screen_x < width && screen_y >= 0 && screen_y < height) {
+                        int pattern = arrow_pattern[y][x];
+                        if (pattern > 0) {
+                            int idx = (screen_y * width + screen_x) * 4;
+                            if (pattern == 1) {
+                                buffer[idx + 0] = 255; buffer[idx + 1] = 255;
+                                buffer[idx + 2] = 255; buffer[idx + 3] = 255;
+                            } else if (pattern == 2) {
+                                buffer[idx + 0] = 0; buffer[idx + 1] = 0;
+                                buffer[idx + 2] = 0; buffer[idx + 3] = 255;
                             }
-                        }
-                    }
-                }
-            } else {
-                // Fallback: Draw 10x10 red square if image not loaded
-                int size = 10;
-                for (int y = cy - size/2; y < cy + size/2; y++) {
-                    for (int x = cx - size/2; x < cx + size/2; x++) {
-                        if (x >= 0 && x < width && y >= 0 && y < height) {
-                            int idx = (y * width + x) * 4;
-                            buffer[idx + 0] = 0; buffer[idx + 1] = 0;
-                            buffer[idx + 2] = 255; buffer[idx + 3] = 255;
                         }
                     }
                 }
@@ -321,12 +309,6 @@ void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
 void ServerThread() {
     WSADATA wsa_data;
     WSAStartup(MAKEWORD(2, 2), &wsa_data);
-
-    // Load custom cursor image
-    g_cursorImage.data = stbi_load(CURSOR_IMAGE_PATH, &g_cursorImage.width, &g_cursorImage.height, &g_cursorImage.channels, 3);
-    if (g_cursorImage.data) {
-        std::cout << "[SUCCESS] Cursor loaded: " << g_cursorImage.width << "x" << g_cursorImage.height << std::endl;
-    }
 
     DesktopDuplicator duplicator;
     int selected_monitor = 1;
