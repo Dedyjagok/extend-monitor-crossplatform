@@ -173,20 +173,27 @@ public:
         return SUCCEEDED(hr);
     }
 
-    bool CaptureFrame(std::vector<uint8_t>& bgra_buffer) {
-        if (!duplication) return false;
+    // returns: 0=no frame, 1=ok, -1=access lost (fullscreen mode change)
+    int CaptureFrame(std::vector<uint8_t>& bgra_buffer) {
+        if (!duplication) return -1;
 
         IDXGIResource* desktop_resource = nullptr;
         DXGI_OUTDUPL_FRAME_INFO frame_info;
-        HRESULT hr = duplication->AcquireNextFrame(10, &frame_info, &desktop_resource);
+        HRESULT hr = duplication->AcquireNextFrame(16, &frame_info, &desktop_resource);
         
-        if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
-        if (FAILED(hr)) return false;
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) return 0;
+        if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) {
+            // Fullscreen exclusive mode activated/deactivated
+            duplication->Release();
+            duplication = nullptr;
+            return -1;
+        }
+        if (FAILED(hr)) return 0;
 
         ID3D11Texture2D* acquired_texture = nullptr;
         hr = desktop_resource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&acquired_texture);
         desktop_resource->Release();
-        if (FAILED(hr)) { duplication->ReleaseFrame(); return false; }
+        if (FAILED(hr)) { duplication->ReleaseFrame(); return 0; }
 
         d3d_context->CopyResource(staging_texture, acquired_texture);
         acquired_texture->Release();
@@ -194,18 +201,70 @@ public:
 
         D3D11_MAPPED_SUBRESOURCE mapped_resource;
         hr = d3d_context->Map(staging_texture, 0, D3D11_MAP_READ, 0, &mapped_resource);
-        if (FAILED(hr)) return false;
+        if (FAILED(hr)) return 0;
 
         bgra_buffer.resize(monitor_width * monitor_height * 4);
         uint8_t* src = (uint8_t*)mapped_resource.pData;
         uint8_t* dst = bgra_buffer.data();
 
+        // Use RowPitch to handle GPU alignment padding correctly
         for (int y = 0; y < monitor_height; y++) {
             memcpy(dst + y * monitor_width * 4, src + y * mapped_resource.RowPitch, monitor_width * 4);
         }
 
         d3d_context->Unmap(staging_texture, 0);
-        return true;
+        return 1;
+    }
+
+    // Reinitialize just the duplication (after access lost)
+    bool Reinitialize(int target_monitor_index) {
+        if (duplication) { duplication->Release(); duplication = nullptr; }
+        if (staging_texture) { staging_texture->Release(); staging_texture = nullptr; }
+
+        IDXGIFactory1* factory = nullptr;
+        if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory))) return false;
+
+        int count = 0;
+        IDXGIAdapter1* adapter = nullptr;
+        IDXGIOutput* output = nullptr;
+        bool found = false;
+
+        for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+            for (UINT j = 0; adapter->EnumOutputs(j, &output) != DXGI_ERROR_NOT_FOUND; ++j) {
+                if (count == target_monitor_index) {
+                    IDXGIOutput1* output1 = nullptr;
+                    if (SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput1), (void**)&output1))) {
+                        HRESULT hr = output1->DuplicateOutput(d3d_device, &duplication);
+                        output1->Release();
+                        if (SUCCEEDED(hr)) {
+                            duplication->GetDesc(&dupl_desc);
+                            
+                            // Recreate staging texture
+                            D3D11_TEXTURE2D_DESC staging_desc = {};
+                            staging_desc.Width = monitor_width;
+                            staging_desc.Height = monitor_height;
+                            staging_desc.MipLevels = 1;
+                            staging_desc.ArraySize = 1;
+                            staging_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                            staging_desc.SampleDesc.Count = 1;
+                            staging_desc.Usage = D3D11_USAGE_STAGING;
+                            staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                            found = SUCCEEDED(d3d_device->CreateTexture2D(&staging_desc, nullptr, &staging_texture));
+                        }
+                    }
+                    output->Release();
+                    adapter->Release();
+                    factory->Release();
+                    return found;
+                }
+                count++;
+                output->Release();
+                output = nullptr;
+            }
+            adapter->Release();
+        }
+        factory->Release();
+        return false;
     }
 
     void Cleanup() {
@@ -348,9 +407,30 @@ void ServerThread() {
         std::cout << "[INFO] Client connected" << std::endl;
 
         std::vector<uint8_t> frame_bgra, resized_bgra, jpeg_data;
+        bool client_ok = true;
         
-        while (g_running) {
-            if (!duplicator.CaptureFrame(frame_bgra)) continue;
+        while (g_running && client_ok) {
+            int result = duplicator.CaptureFrame(frame_bgra);
+            
+            if (result == -1) {
+                // Access lost - fullscreen app went exclusive. Reinitialize.
+                std::cout << "[WARN] DXGI access lost (fullscreen app?). Reinitializing..." << std::endl;
+                closesocket(client_socket);
+                client_ok = false;
+                
+                // Retry reinit until success or shutdown
+                while (g_running) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    if (duplicator.Reinitialize(selected_monitor)) {
+                        std::cout << "[INFO] Reinit OK. Waiting for client to reconnect..." << std::endl;
+                        break;
+                    }
+                }
+                break; // return to outer accept() loop
+            }
+            
+            if (result == 0) continue; // no new frame yet
+            
             DrawCursor(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(), 
                        duplicator.GetLeft(), duplicator.GetTop());
             ResizeBGRA(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(),
@@ -375,13 +455,12 @@ void ServerThread() {
             while (total_sent < (int)size) {
                 int sent = send(client_socket, (char*)jpeg_data.data() + total_sent, 
                                size - total_sent, 0);
-                if (sent == SOCKET_ERROR) goto client_disconnect;
+                if (sent == SOCKET_ERROR) { client_ok = false; break; }
                 total_sent += sent;
             }
         }
 
-client_disconnect:
-        closesocket(client_socket);
+        if (client_ok) closesocket(client_socket);
     }
 
     closesocket(listen_socket);

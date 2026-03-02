@@ -238,38 +238,14 @@ int main(int argc, char* argv[]) {
             first_frame = false;
         }
         
-        // Sanity check
-        if (frame_size > 50 * 1024 * 1024) { // Max 50MB
-            std::cerr << "[ERROR] Invalid frame size: " << frame_size << std::endl;
-            break;
-        }
-        
-        // Verify frame size matches expected RGB size
-        uint64_t expected_size = frame_width * frame_height * 3;
-        if (frame_size != expected_size) {
-            std::cerr << "[ERROR] Frame size mismatch!" << std::endl;
-            std::cerr << "  Expected: " << expected_size << " bytes (" << frame_width << "x" << frame_height << " RGB)" << std::endl;
-            std::cerr << "  Received: " << frame_size << " bytes" << std::endl;
-            std::cerr << "  Server may be sending wrong format!" << std::endl;
-            break;
-        }
-
-        // Check if texture needs update
+        // Check if texture size changed (dynamic resolution support)
         int tex_w, tex_h;
         SDL_QueryTexture(texture, nullptr, nullptr, &tex_w, &tex_h);
         if (tex_w != frame_width || tex_h != frame_height) {
-            std::cout << "[INFO] Resizing Texture to: " << frame_width << "x" << frame_height << std::endl;
+            std::cout << "[INFO] Resizing texture: " << tex_w << "x" << tex_h << " -> " << frame_width << "x" << frame_height << std::endl;
             SDL_DestroyTexture(texture);
-            texture = SDL_CreateTexture(
-                renderer,
-                SDL_PIXELFORMAT_RGB24,
-                SDL_TEXTUREACCESS_STREAMING,
-                frame_width,
-                frame_height
-            );
-            
-            // Allow window to be resized if not fullscreen?
-            // For now, keep fullscreen but scale aspect ratio
+            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+                SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
         }
 
         // Receive frame data
@@ -279,8 +255,19 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        // Update texture (this assumes raw RGB data - modify if using JPEG)
-        SDL_UpdateTexture(texture, nullptr, frame_buffer.data(), frame_width * 3);
+        // Update texture using LockTexture to get the correct SDL internal pitch
+        // (SDL may pad rows internally; we must respect that or pixels scramble)
+        void* pixels;
+        int pitch;
+        if (SDL_LockTexture(texture, nullptr, &pixels, &pitch) == 0) {
+            uint8_t* dst = (uint8_t*)pixels;
+            uint8_t* src = frame_buffer.data();
+            int row_bytes = frame_width * 3; // RGB = 3 bytes per pixel
+            for (int y = 0; y < frame_height; y++) {
+                memcpy(dst + y * pitch, src + y * row_bytes, row_bytes);
+            }
+            SDL_UnlockTexture(texture);
+        }
 
         // Render
         SDL_RenderClear(renderer);
