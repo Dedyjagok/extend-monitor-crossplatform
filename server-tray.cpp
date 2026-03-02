@@ -291,58 +291,7 @@ bool EncodeJPEG(const std::vector<uint8_t>& bgra_data, int width, int height,
     return true;
 }
 
-void DrawCursor(std::vector<uint8_t>& buffer, int width, int height, int offset_x, int offset_y) {
-    CURSORINFO ci = {0};
-    ci.cbSize = sizeof(ci);
-    if (GetCursorInfo(&ci)) {
-        if (ci.flags == CURSOR_SHOWING) {
-            int cx = ci.ptScreenPos.x - offset_x;
-            int cy = ci.ptScreenPos.y - offset_y;
-            
-            // Simple 11x17 arrow cursor pattern (white with black outline)
-            const int arrow_pattern[17][11] = {
-                {2,0,0,0,0,0,0,0,0,0,0},
-                {2,2,0,0,0,0,0,0,0,0,0},
-                {2,1,2,0,0,0,0,0,0,0,0},
-                {2,1,1,2,0,0,0,0,0,0,0},
-                {2,1,1,1,2,0,0,0,0,0,0},
-                {2,1,1,1,1,2,0,0,0,0,0},
-                {2,1,1,1,1,1,2,0,0,0,0},
-                {2,1,1,1,1,1,1,2,0,0,0},
-                {2,1,1,1,1,1,1,1,2,0,0},
-                {2,1,1,1,1,1,1,1,1,2,0},
-                {2,1,1,1,1,1,2,2,2,2,0},
-                {2,1,1,2,1,1,2,0,0,0,0},
-                {2,1,2,0,2,1,1,2,0,0,0},
-                {2,2,0,0,2,1,1,2,0,0,0},
-                {0,0,0,0,0,2,1,1,2,0,0},
-                {0,0,0,0,0,2,1,1,2,0,0},
-                {0,0,0,0,0,0,2,2,0,0,0}
-            };
-            
-            for (int y = 0; y < 17; y++) {
-                for (int x = 0; x < 11; x++) {
-                    int screen_x = cx + x;
-                    int screen_y = cy + y;
-                    
-                    if (screen_x >= 0 && screen_x < width && screen_y >= 0 && screen_y < height) {
-                        int pattern = arrow_pattern[y][x];
-                        if (pattern > 0) {
-                            int idx = (screen_y * width + screen_x) * 4;
-                            if (pattern == 1) {
-                                buffer[idx + 0] = 255; buffer[idx + 1] = 255;
-                                buffer[idx + 2] = 255; buffer[idx + 3] = 255;
-                            } else if (pattern == 2) {
-                                buffer[idx + 0] = 0; buffer[idx + 1] = 0;
-                                buffer[idx + 2] = 0; buffer[idx + 3] = 255;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+
 
 void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
                 std::vector<uint8_t>& dst, int dst_w, int dst_h) {
@@ -431,8 +380,6 @@ void ServerThread() {
             
             if (result == 0) continue; // no new frame yet
             
-            DrawCursor(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(), 
-                       duplicator.GetLeft(), duplicator.GetTop());
             ResizeBGRA(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(),
                       resized_bgra, TARGET_WIDTH, TARGET_HEIGHT);
             EncodeJPEG(resized_bgra, TARGET_WIDTH, TARGET_HEIGHT, jpeg_data, JPEG_QUALITY);
