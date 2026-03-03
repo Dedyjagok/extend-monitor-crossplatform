@@ -290,7 +290,57 @@ bool EncodeJPEG(const std::vector<uint8_t>& bgra_data, int width, int height,
     }
     return true;
 }
+// Draw Windows cursor into the BGRA frame buffer
+// (reliable cross-platform approach: cursor is baked into the video stream)
+void DrawCursor(std::vector<uint8_t>& buffer, int buf_w, int buf_h,
+                int offset_x, int offset_y, int target_w, int target_h) {
+    CURSORINFO ci = {0};
+    ci.cbSize = sizeof(ci);
+    if (!GetCursorInfo(&ci) || ci.flags != CURSOR_SHOWING) return;
 
+    // Cursor position relative to the captured monitor
+    int cx_raw = ci.ptScreenPos.x - offset_x;
+    int cy_raw = ci.ptScreenPos.y - offset_y;
+
+    // Scale to the target (stream) resolution
+    float scale_x = (float)target_w / buf_w;
+    float scale_y = (float)target_h / buf_h;
+    int cx = (int)(cx_raw * scale_x);
+    int cy = (int)(cy_raw * scale_y);
+
+    // 11x17 white arrow with black outline
+    static const int P[17][11] = {
+        {2,0,0,0,0,0,0,0,0,0,0},
+        {2,2,0,0,0,0,0,0,0,0,0},
+        {2,1,2,0,0,0,0,0,0,0,0},
+        {2,1,1,2,0,0,0,0,0,0,0},
+        {2,1,1,1,2,0,0,0,0,0,0},
+        {2,1,1,1,1,2,0,0,0,0,0},
+        {2,1,1,1,1,1,2,0,0,0,0},
+        {2,1,1,1,1,1,1,2,0,0,0},
+        {2,1,1,1,1,1,1,1,2,0,0},
+        {2,1,1,1,1,1,1,1,1,2,0},
+        {2,1,1,1,1,1,2,2,2,2,0},
+        {2,1,1,2,1,1,2,0,0,0,0},
+        {2,1,2,0,2,1,1,2,0,0,0},
+        {2,2,0,0,2,1,1,2,0,0,0},
+        {0,0,0,0,0,2,1,1,2,0,0},
+        {0,0,0,0,0,2,1,1,2,0,0},
+        {0,0,0,0,0,0,2,2,0,0,0}
+    };
+
+    for (int y = 0; y < 17; y++) {
+        for (int x = 0; x < 11; x++) {
+            int sx = cx + x, sy = cy + y;
+            if (sx < 0 || sx >= target_w || sy < 0 || sy >= target_h) continue;
+            int p = P[y][x];
+            if (p == 0) continue;
+            int idx = (sy * target_w + sx) * 4;
+            if (p == 1) { buffer[idx]=255; buffer[idx+1]=255; buffer[idx+2]=255; buffer[idx+3]=255; }
+            else         { buffer[idx]=0;   buffer[idx+1]=0;   buffer[idx+2]=0;   buffer[idx+3]=255; }
+        }
+    }
+}
 
 
 void ResizeBGRA(const std::vector<uint8_t>& src, int src_w, int src_h,
@@ -380,8 +430,16 @@ void ServerThread() {
             
             if (result == 0) continue; // no new frame yet
             
+            // Resize first to target resolution
             ResizeBGRA(frame_bgra, duplicator.GetWidth(), duplicator.GetHeight(),
                       resized_bgra, TARGET_WIDTH, TARGET_HEIGHT);
+            
+            // Draw cursor into the resized frame (scaled to stream resolution)
+            DrawCursor(resized_bgra,
+                       duplicator.GetWidth(), duplicator.GetHeight(),
+                       duplicator.GetLeft(), duplicator.GetTop(),
+                       TARGET_WIDTH, TARGET_HEIGHT);
+
             EncodeJPEG(resized_bgra, TARGET_WIDTH, TARGET_HEIGHT, jpeg_data, JPEG_QUALITY);
 
             uint32_t magic_net = htonl(0xDEADBEEF);
