@@ -26,8 +26,8 @@
 // Configuration
 const char* PROTOCOL_VERSION = "v2.0-Magic";
 const int PORT = 9999;
-const int TARGET_WIDTH = 1280;
-const int TARGET_HEIGHT = 720;
+const int TARGET_WIDTH = 1366;
+const int TARGET_HEIGHT = 768;
 const int JPEG_QUALITY = 30;
 
 // Tray Icon IDs

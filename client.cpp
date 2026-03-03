@@ -33,8 +33,8 @@
 
 const char* PROTOCOL_VERSION = "v2.0-Magic";
 const int PORT = 9999;
-const int SCREEN_WIDTH = 1280;
-const int SCREEN_HEIGHT = 720;
+const int SCREEN_WIDTH = 1366;
+const int SCREEN_HEIGHT = 768;
 
 // Byte order conversion for 64-bit integers
 inline uint64_t ntohll(uint64_t value) {
