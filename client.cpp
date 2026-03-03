@@ -126,14 +126,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Create borderless window (not fullscreen — fullscreen suppresses the OS cursor on Linux)
+    // Fullscreen window - cursor is drawn server-side so fullscreen is safe
     SDL_Window* window = SDL_CreateWindow(
         "Monitor Extender",
         SDL_WINDOWPOS_UNDEFINED,
         SDL_WINDOWPOS_UNDEFINED,
         SCREEN_WIDTH,
         SCREEN_HEIGHT,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_MAXIMIZED
+        SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN_DESKTOP
     );
 
     if (!window) {
