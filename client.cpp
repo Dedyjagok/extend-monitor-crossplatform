@@ -159,6 +159,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Force OS cursor visible (SDL fullscreen can hide it by default)
+    SDL_ShowCursor(SDL_ENABLE);
+
     // Create texture for streaming (RGB format)
     SDL_Texture* texture = SDL_CreateTexture(
         renderer,
