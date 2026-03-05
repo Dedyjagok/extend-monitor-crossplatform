@@ -66,14 +66,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const char* server_ip = argv[1];
-
     std::cout << "[INFO] Monitor Extender Client (C++)" << std::endl;
     std::cout << "[INFO] Protocol Version: " << PROTOCOL_VERSION << std::endl;
-    std::cout << "[INFO] Connecting to " << server_ip << ":" << PORT << std::endl;
+    std::cout << "[INFO] Server: " << server_ip << ":" << PORT << std::endl;
 
 #ifdef _WIN32
-    // Initialize Winsock (Windows only)
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
         std::cerr << "[ERROR] WSAStartup failed" << std::endl;
@@ -81,223 +78,215 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    // Create socket
-    SOCKET client_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (client_socket == INVALID_SOCKET) {
-        std::cerr << "[ERROR] Failed to create socket" << std::endl;
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return 1;
-    }
-
-    // Enable TCP_NODELAY
-    int flag = 1;
-    setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag));
-
-    // Connect
-    struct sockaddr_in server_addr = {};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
-
-    if (connect(client_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
-#ifdef _WIN32
-        std::cerr << "[ERROR] Connection failed: " << WSAGetLastError() << std::endl;
-#else
-        std::cerr << "[ERROR] Connection failed: " << strerror(errno) << std::endl;
-#endif
-        close(client_socket);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return 1;
-    }
-
-    std::cout << "[INFO] Connected to server!" << std::endl;
-
-    // Initialize SDL
+    // ── SDL init once ──────────────────────────────────────────────────────
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "[ERROR] SDL_Init failed: " << SDL_GetError() << std::endl;
-        close(client_socket);
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     }
 
-    // Fullscreen window - cursor is drawn server-side so fullscreen is safe
     SDL_Window* window = SDL_CreateWindow(
         "Monitor Extender",
-        SDL_WINDOWPOS_UNDEFINED,
-        SDL_WINDOWPOS_UNDEFINED,
-        SCREEN_WIDTH,
-        SCREEN_HEIGHT,
+        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+        SCREEN_WIDTH, SCREEN_HEIGHT,
         SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN_DESKTOP
     );
-
     if (!window) {
         std::cerr << "[ERROR] Failed to create window: " << SDL_GetError() << std::endl;
         SDL_Quit();
-        close(client_socket);
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     }
 
-    // Create renderer (hardware accelerated)
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1,
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {
         std::cerr << "[ERROR] Failed to create renderer: " << SDL_GetError() << std::endl;
         SDL_DestroyWindow(window);
         SDL_Quit();
-        close(client_socket);
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     }
 
-    // Force OS cursor visible (SDL fullscreen can hide it by default)
     SDL_ShowCursor(SDL_ENABLE);
 
-    // Create texture for streaming (RGB format)
-    SDL_Texture* texture = SDL_CreateTexture(
-        renderer,
-        SDL_PIXELFORMAT_RGB24,
-        SDL_TEXTUREACCESS_STREAMING,
-        SCREEN_WIDTH,
-        SCREEN_HEIGHT
-    );
-
+    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+        SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
     if (!texture) {
         std::cerr << "[ERROR] Failed to create texture: " << SDL_GetError() << std::endl;
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
-        close(client_socket);
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     }
 
-    std::cout << "[INFO] Display initialized. Press ESC to quit." << std::endl;
+    std::cout << "[INFO] Window ready. Press ESC to quit." << std::endl;
 
-    // Main loop
-    bool running = true;
+    // ── Reconnect loop ─────────────────────────────────────────────────────
+    bool app_running = true;
     std::vector<uint8_t> frame_buffer;
-    Uint32 frame_count = 0;
-    Uint32 fps_start = SDL_GetTicks();
 
-    while (running) {
-        // Handle SDL events
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                running = false;
-            } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-                running = false;
-            }
-        }
-
-        // Receive Header: [MAGIC (4)] [Size (8)] [Width (4)] [Height (4)]
-        char header[20];
-        if (!RecvAll(client_socket, header, 20)) {
-            std::cerr << "[ERROR] Failed to receive header" << std::endl;
-            break;
-        }
-
-        // 1. Verify Magic
-        uint32_t magic_net;
-        memcpy(&magic_net, header, 4);
-        if (ntohl(magic_net) != 0xDEADBEEF) {
-            std::cerr << "[FATAL] PROTOCOL MISMATCH!" << std::endl;
-            std::cerr << "Server is sending invalid data. Please recompiling SERVER and CLIENT." << std::endl;
-            break;
-        }
-
-        // 2. Parse Size
-        uint64_t frame_size_net;
-        memcpy(&frame_size_net, header + 4, 8);
-        uint64_t frame_size = ntohll(frame_size_net);
-
-        // 3. Parse Resolution
-        uint32_t width_net, height_net;
-        memcpy(&width_net, header + 12, 4);
-        memcpy(&height_net, header + 16, 4);
-        int frame_width = ntohl(width_net);
-        int frame_height = ntohl(height_net);
-        
-        // Debug first frame
-        static bool first_frame = true;
-        if (first_frame) {
-            std::cout << "[DEBUG] First frame received:" << std::endl;
-            std::cout << "  Resolution: " << frame_width << "x" << frame_height << std::endl;
-            std::cout << "  Frame size: " << frame_size << " bytes" << std::endl;
-            std::cout << "  Expected size (RGB): " << (frame_width * frame_height * 3) << " bytes" << std::endl;
-            std::cout << "  Pitch: " << (frame_width * 3) << " bytes/row" << std::endl;
-            first_frame = false;
-        }
-        
-        // Check if texture size changed (dynamic resolution support)
-        int tex_w, tex_h;
-        SDL_QueryTexture(texture, nullptr, nullptr, &tex_w, &tex_h);
-        if (tex_w != frame_width || tex_h != frame_height) {
-            std::cout << "[INFO] Resizing texture: " << tex_w << "x" << tex_h << " -> " << frame_width << "x" << frame_height << std::endl;
-            SDL_DestroyTexture(texture);
-            texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
-                SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
-        }
-
-        // Receive frame data
-        frame_buffer.resize(frame_size);
-        if (!RecvAll(client_socket, (char*)frame_buffer.data(), frame_size)) {
-            std::cerr << "[ERROR] Failed to receive frame data" << std::endl;
-            break;
-        }
-
-        // Update texture using LockTexture to get the correct SDL internal pitch
-        // (SDL may pad rows internally; we must respect that or pixels scramble)
-        void* pixels;
-        int pitch;
-        if (SDL_LockTexture(texture, nullptr, &pixels, &pitch) == 0) {
-            uint8_t* dst = (uint8_t*)pixels;
-            uint8_t* src = frame_buffer.data();
-            int row_bytes = frame_width * 3; // RGB = 3 bytes per pixel
-            for (int y = 0; y < frame_height; y++) {
-                memcpy(dst + y * pitch, src + y * row_bytes, row_bytes);
-            }
-            SDL_UnlockTexture(texture);
-        }
-
-        // Render
+    while (app_running) {
+        // Show black screen while connecting
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, texture, nullptr, nullptr);
         SDL_RenderPresent(renderer);
 
-        // FPS counter
-        frame_count++;
-        Uint32 now = SDL_GetTicks();
-        if (now - fps_start >= 5000) {
-            float fps = frame_count / ((now - fps_start) / 1000.0f);
-            std::cout << "[INFO] FPS: " << fps << " | Frame size: " << frame_size / 1024 << " KB" << std::endl;
-            frame_count = 0;
-            fps_start = now;
+        // Check for quit events while reconnecting
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) { app_running = false; break; }
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+                app_running = false; break;
+            }
+        }
+        if (!app_running) break;
+
+        // Create socket and connect
+        SOCKET client_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (client_socket == INVALID_SOCKET) {
+            std::cerr << "[ERROR] Failed to create socket, retrying..." << std::endl;
+            SDL_Delay(2000);
+            continue;
+        }
+
+        int flag = 1;
+        setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag));
+
+        struct sockaddr_in server_addr = {};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(PORT);
+        inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
+
+        if (connect(client_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+            std::cout << "[INFO] Waiting for server..." << std::endl;
+            close(client_socket);
+            SDL_Delay(2000);
+            continue;
+        }
+
+        std::cout << "[INFO] Connected!" << std::endl;
+
+        // ── Streaming loop (runs until server disconnects) ─────────────────
+        bool connected = true;
+        Uint32 frame_count = 0;
+        Uint32 fps_start = SDL_GetTicks();
+        bool first_frame = true;
+
+        while (connected && app_running) {
+            // SDL events
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_QUIT) { app_running = false; connected = false; }
+                if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+                    app_running = false; connected = false;
+                }
+            }
+            if (!connected) break;
+
+            // Receive header [MAGIC(4)][SIZE(8)][W(4)][H(4)]
+            char header[20];
+            if (!RecvAll(client_socket, header, 20)) {
+                std::cout << "[INFO] Server disconnected. Reconnecting in 2s..." << std::endl;
+                connected = false; break;
+            }
+
+            // Verify magic
+            uint32_t magic_net;
+            memcpy(&magic_net, header, 4);
+            if (ntohl(magic_net) != 0xDEADBEEF) {
+                std::cerr << "[FATAL] Protocol mismatch — recompile server and client!" << std::endl;
+                app_running = false; break;
+            }
+
+            // Parse size
+            uint64_t frame_size_net;
+            memcpy(&frame_size_net, header + 4, 8);
+            uint64_t frame_size = ntohll(frame_size_net);
+
+            // Parse resolution
+            uint32_t width_net, height_net;
+            memcpy(&width_net, header + 12, 4);
+            memcpy(&height_net, header + 16, 4);
+            int frame_width = ntohl(width_net);
+            int frame_height = ntohl(height_net);
+
+            if (first_frame) {
+                std::cout << "[INFO] Stream: " << frame_width << "x" << frame_height
+                          << " (" << frame_size << " bytes/frame)" << std::endl;
+                first_frame = false;
+            }
+
+            // Resize texture if resolution changed
+            int tex_w, tex_h;
+            SDL_QueryTexture(texture, nullptr, nullptr, &tex_w, &tex_h);
+            if (tex_w != frame_width || tex_h != frame_height) {
+                SDL_DestroyTexture(texture);
+                texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+                    SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
+            }
+
+            // Receive frame data
+            frame_buffer.resize(frame_size);
+            if (!RecvAll(client_socket, (char*)frame_buffer.data(), frame_size)) {
+                std::cout << "[INFO] Server disconnected. Reconnecting in 2s..." << std::endl;
+                connected = false; break;
+            }
+
+            // Update texture row-by-row (respects SDL internal pitch to avoid scramble)
+            void* pixels; int pitch;
+            if (SDL_LockTexture(texture, nullptr, &pixels, &pitch) == 0) {
+                uint8_t* dst = (uint8_t*)pixels;
+                uint8_t* src = frame_buffer.data();
+                int row_bytes = frame_width * 3;
+                for (int y = 0; y < frame_height; y++)
+                    memcpy(dst + y * pitch, src + y * row_bytes, row_bytes);
+                SDL_UnlockTexture(texture);
+            }
+
+            SDL_RenderClear(renderer);
+            SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+            SDL_RenderPresent(renderer);
+
+            // FPS counter
+            frame_count++;
+            Uint32 now = SDL_GetTicks();
+            if (now - fps_start >= 5000) {
+                float fps = frame_count / ((now - fps_start) / 1000.0f);
+                std::cout << "[INFO] FPS: " << fps
+                          << " | " << frame_size / 1024 << " KB/frame" << std::endl;
+                frame_count = 0;
+                fps_start = now;
+            }
+        }
+
+        close(client_socket);
+
+        // Brief pause before reconnect attempt, but keep polling SDL events
+        if (app_running) {
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+            SDL_RenderPresent(renderer);
+            SDL_Delay(2000);
         }
     }
 
-    // Cleanup
+    // ── Cleanup ────────────────────────────────────────────────────────────
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    close(client_socket);
 #ifdef _WIN32
     WSACleanup();
 #endif
-
-    std::cout << "[INFO] Client closed" << std::endl;
+    std::cout << "[INFO] Client closed." << std::endl;
     return 0;
 }
