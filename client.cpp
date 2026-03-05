@@ -66,6 +66,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    const char* server_ip = argv[1];
+
     std::cout << "[INFO] Monitor Extender Client (C++)" << std::endl;
     std::cout << "[INFO] Protocol Version: " << PROTOCOL_VERSION << std::endl;
     std::cout << "[INFO] Server: " << server_ip << ":" << PORT << std::endl;
